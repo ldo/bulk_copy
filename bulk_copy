@@ -3,10 +3,14 @@
 # This script copies a bunch of MySQL records according to specified criteria.
 # Invoke this script as follows:
 #
-#     bulk_copy [--user=username] [--password=password] [--database=database]
+#     bulk_copy [--user=username] [--password=password]
+#          [--host=host] [--port=port] [--database=database]
 #         src_table_name field_names condition dst_table_name [replace_field_value ...]
 #
-# where the username, password and database are used as MySQL connection parameters.
+# where the username, password, host, port and database are used as MySQL connection parameters.
+# If --password is specified but an empty value is given, then the user will be prompted for
+# the password without echoing.
+#
 # The arguments are as follows:
 #
 #     src_table_name      -- the name of the table to select records from.
@@ -30,6 +34,7 @@
 import sys
 import MySQLdb
 import getopt
+import getpass
 
 #+
 # Useful MySQL stuff
@@ -163,7 +168,9 @@ class BulkInserter :
 	"",
 	[
 		"database=",
+		"host=",
 		"password=",
+		"port=",
 		"user=",
 	]
   )
@@ -191,12 +198,19 @@ ConnParams = {}
 for Keyword, Value in Opts :
 	if Keyword == "--database" :
 		ConnParams["db"] = Value
+	elif Keyword == "--host" :
+		ConnParams["host"] = Value
+	elif Keyword == "--port" :
+		ConnParams["port"] = Value
 	elif Keyword == "--user" :
 		ConnParams["user"] = Value
 	elif Keyword == "--password" :
 		ConnParams["passwd"] = Value
 	#end if
 #end for
+if ConnParams.get("passwd") == "" :
+	ConnParams["passwd"] = getpass.getpass()
+#end if
 Conn = MySQLdb.Connection(**ConnParams)
 if len(field_names) == 1 and field_names[0] == "*" :
 	field_names = list \
@@ -213,6 +227,7 @@ if len(field_names) == 1 and field_names[0] == "*" :
 #end if
 all_field_names = field_names + replace_field_names
 
+nr_records = 0
 Insert = BulkInserter(Conn, dst_table_name, all_field_names, False)
 for \
 		Entry \
@@ -231,7 +246,9 @@ for \
 		  ) \
 :
 	Insert.AddRecord(list(Entry) + replace_field_values)
+	nr_records += 1
 #end for
 Insert.DoneInsert()
+sys.stderr.write("records inserted: %s\n" % nr_records)
 
 Conn.close()
