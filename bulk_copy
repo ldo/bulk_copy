@@ -201,7 +201,7 @@ for Keyword, Value in Opts :
 	elif Keyword == "--host" :
 		ConnParams["host"] = Value
 	elif Keyword == "--port" :
-		ConnParams["port"] = Value
+		ConnParams["port"] = int(Value)
 	elif Keyword == "--user" :
 		ConnParams["user"] = Value
 	elif Keyword == "--password" :
