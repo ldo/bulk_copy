@@ -1,0 +1,196 @@
+#!/usr/bin/python
+#+
+# This script does text conversion on values of a specified field in a table of
+# a MySQL database. Invoke this script as follows:
+#
+#     convert_field [--user=username] [--password=password]
+#          [--host=host] [--port=port] [--database=database] [--convert]
+#         table_name id_field_names field_name src_encoding dst_encoding
+#
+# where the username, password, host, port and database are used as MySQL connection parameters.
+# If --password is specified but an empty value is given, then the user will be prompted for
+# the password without echoing.
+#
+# table_name is the name of the table, id_field_name is the name of a unique-valued field
+# (or comma-separated list of fields with a unique-valued combination of values) identifying
+# each record for update purposes, and field_name is the name of the field in that table
+# to check. The values are assumed to be in encoding src_encoding, and they will be converted
+# to encoding dst_encoding. If --convert is specified, then the field values will be updated;
+# otherwise the script will only report which field values need changing.
+#
+# Written by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>.
+#-
+
+import sys
+import MySQLdb
+import getopt
+import getpass
+
+#+
+# Useful MySQL stuff
+#-
+
+def SQLIter(Conn, Cmd, Values = None, MapFn = None) :
+	"""generator which executes Cmd with Values in a new cursor on Conn,
+	yielding the rows one at a time, optionally mapped through function MapFn."""
+	if MapFn == None :
+		MapFn = lambda x : x
+	#end if
+	Cursor = Conn.cursor()
+	Cursor.execute(Cmd, Values)
+	while True :
+		NextRow = Cursor.fetchone()
+		if NextRow == None :
+			Cursor.close()
+			raise StopIteration
+		#end if
+		yield MapFn(NextRow)
+	#end while
+#end SQLIter
+
+def SQLString(Str) :
+	"""returns a MySQL string literal which evaluates to Str. Needed
+	for those times when MySQLdb's automatic quoting isn't good enough."""
+	Result = []
+	for Ch in str(Str) :
+		if Ch == "\0" :
+			Ch = "\\0"
+		elif Ch == "\010" :
+			Ch = "\\b"
+		elif Ch == "\011" :
+			Ch = "\\t"
+		elif Ch == "\012" :
+			Ch = "\\n"
+		elif Ch == "\015" :
+			Ch = "\\r"
+		elif Ch == "\032" :
+			Ch = "\\z"
+		elif Ch == "'" or Ch == "\"" or Ch == "\\" :
+			Ch = "\\" + Ch
+		#end if
+		Result.append(Ch)
+	#end for
+	return "\"" + "".join(Result) + "\""
+#end SQLString
+
+#+
+# Mainline
+#-
+
+(Opts, Args) = getopt.getopt \
+  (
+	sys.argv[1:],
+	"",
+	[
+		"database=",
+		"host=",
+		"password=",
+		"port=",
+		"user=",
+		"convert",
+	]
+  )
+if len(Args) != 5 :
+	raise getopt.GetoptError \
+	  (
+		"need table_name, field_name, src_encoding and dst_encoding args"
+	  )
+#end if
+(table_name, id_field_names, field_name, src_encoding, dst_encoding) = Args
+id_field_names = tuple(id_field_names.split(","))
+ConnParams = {}
+DoConvert = False
+for Keyword, Value in Opts :
+	if Keyword == "--database" :
+		ConnParams["db"] = Value
+	elif Keyword == "--host" :
+		ConnParams["host"] = Value
+	elif Keyword == "--port" :
+		ConnParams["port"] = int(Value)
+	elif Keyword == "--user" :
+		ConnParams["user"] = Value
+	elif Keyword == "--password" :
+		ConnParams["passwd"] = Value
+	elif Keyword == "--convert" :
+		DoConvert = True
+	#end if
+#end for
+if ConnParams.get("passwd") == "" :
+	ConnParams["passwd"] = getpass.getpass()
+#end if
+Conn = MySQLdb.Connection(**ConnParams)
+
+UpdateCursor = None
+NrChecked = 0
+NrChanged = 0
+for \
+	InFields \
+in \
+	SQLIter \
+	  (
+		Conn = Conn,
+		Cmd =
+				"select %(fields)s from %(table)s"
+			%
+				{
+					"fields" : ", ".join((field_name,) + id_field_names),
+					"table" : table_name,
+				}
+	  ) \
+:
+	NrChecked += 1
+	InValue = InFields[0]
+	OutValue = InValue.decode(src_encoding).encode(dst_encoding)
+	if OutValue != InValue :
+		NrChanged += 1
+		sys.stdout.write \
+		  (
+				"(%(identify)s): %(old)s => %(new)s\n"
+			%
+				{
+					"identify" : ", ".join
+						  (
+								"%(field)s = %(value)s"
+							%
+								{
+									"field" : id_field_names[i],
+									"value" : SQLString(InFields[i + 1]),
+								}
+							for i in range(0, len(id_field_names))
+						  ),
+					"old" : SQLString(InValue),
+					"new" : SQLString(OutValue),
+				}
+		  )
+		if DoConvert :
+			if UpdateCursor == None :
+				UpdateCursor = Conn.cursor()
+			#end if
+			UpdateCursor.execute \
+			  (
+					"update %(table)s set %(field)s = %(value)s where %(identify)s"
+				%
+					{
+						"table" : table_name,
+						"field" : field_name,
+						"value" : SQLString(OutValue),
+						"identify" : " and ".join
+						  (
+								"%(field)s = %(value)s"
+							%
+								{
+									"field" : id_field_names[i],
+									"value" : SQLString(InFields[i + 1]),
+								}
+							for i in range(0, len(id_field_names))
+						  ),
+					}
+			  )
+		#end if
+	#end if
+#end for
+if UpdateCursor != None :
+	UpdateCursor.close()
+#end if
+Conn.close()
+sys.stdout.write("Changed/Checked = %d/%d\n" % (NrChanged, NrChecked))
