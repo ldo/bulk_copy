@@ -1,0 +1,218 @@
+#!/usr/bin/python
+#+
+# This script does comparisons on two sets of records and displays any differences.
+# Invoke it as follows:
+#
+#     compare_records [--user=username] [--password=password] [--host=host] [--port=port]
+#         [--database=database]
+#         remap...
+#         field_names
+#         table_spec
+#         criteria1
+#         criteria2
+#
+# where the username, password, host, port and database are used as MySQL connection parameters.
+# If --password is specified but an empty value is given, then the user will be prompted for
+# the password without echoing.
+#
+# field_names is a comma-separated list of names of fields whose values are to be compared,
+# and table_spec specifies the table(s) from which the fields are to be obtained; this can
+# be a simple table name, or a join on multiple tables. A field name of the form * expands to
+# all the fields in table_spec (which must be a simple table name in this case), while
+# table_name.* expands to all the fields defined for the specified table. A field name beginning
+# with - means to exclude that particular name from a prior wildcard expansion.
+#
+# criteria1 and criteria2 are MySQL expressions selecting the two sets of records to be
+# compared. The optional remap specifications take the form of
+#
+#     --remap=field:value1:value2
+#
+# This means that value1 for field in the first record set is to be taken as equivalent to
+# value2 for field in the second record set.
+#
+# Written by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>.
+#-
+
+import sys
+import MySQLdb
+import getopt
+import getpass
+
+#+
+# Useful MySQL stuff
+#-
+
+def SQLIter(Conn, Cmd, Values = None, MapFn = None) :
+	"""generator which executes Cmd with Values in a new cursor on Conn,
+	yielding the rows one at a time, optionally mapped through function MapFn."""
+	if MapFn == None :
+		MapFn = lambda x : x
+	#end if
+	Cursor = Conn.cursor()
+	Cursor.execute(Cmd, Values)
+	while True :
+		NextRow = Cursor.fetchone()
+		if NextRow == None :
+			Cursor.close()
+			raise StopIteration
+		#end if
+		yield MapFn(NextRow)
+	#end while
+#end SQLIter
+
+#+
+# Mainline
+#-
+
+(Opts, Args) = getopt.getopt \
+  (
+	sys.argv[1:],
+	"",
+	[
+		"database=",
+		"host=",
+		"password=",
+		"port=",
+		"user=",
+		"remap=",
+	]
+  )
+if len(Args) != 4 :
+	raise getopt.GetoptError \
+	  (
+		"need field_names, table_spec, criteria1 and criteria2 args"
+	  )
+#end if
+(ArgFieldNames, TableSpec, Criteria1, Criteria2) = Args
+ConnParams = {}
+Remap = {}
+for Keyword, Value in Opts :
+	if Keyword == "--database" :
+		ConnParams["db"] = Value
+	elif Keyword == "--host" :
+		ConnParams["host"] = Value
+	elif Keyword == "--port" :
+		ConnParams["port"] = int(Value)
+	elif Keyword == "--user" :
+		ConnParams["user"] = Value
+	elif Keyword == "--password" :
+		ConnParams["passwd"] = Value
+	elif Keyword == "--remap" :
+		(RemapField, RemapValue1, RemapValue2) = Value.split(":", 2)
+		if not Remap.has_key(RemapField) :
+			Remap[RemapField] = {}
+		#end if
+		Remap[RemapField][RemapValue1] = RemapValue2
+	#end if
+#end for
+if ConnParams.get("passwd") == "" :
+	ConnParams["passwd"] = getpass.getpass()
+#end if
+Conn = MySQLdb.Connection(**ConnParams)
+FieldNames = []
+for Entry in ArgFieldNames.split(",") :
+	if Entry == "*" :
+		FieldNames.extend \
+		  (
+			SQLIter
+			  (
+				Conn = Conn,
+				Cmd = "show columns from %s" % TableSpec,
+				MapFn = lambda x : x[0]
+			  )
+		  )
+	elif Entry.endswith(".*") :
+		TableName = Entry[:-2]
+		FieldNames.extend \
+		  (
+			SQLIter
+			  (
+				Conn = Conn,
+				Cmd = "show columns from %s" % TableName,
+				MapFn = lambda x : TableName + "." + x[0]
+			  )
+		  )
+	elif Entry.startswith("-") :
+		FieldNames = list \
+		  (
+			f for f in FieldNames if f != Entry[1:]
+		  )
+	else :
+		FieldNames.append(Entry)
+	#end if
+#end for
+
+Iter1 = SQLIter \
+  (
+	Conn = Conn,
+	Cmd =
+			"select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(fieldnames)s"
+		%
+			{
+				"fieldnames" : ", ".join(FieldNames),
+				"tablespec" : TableSpec,
+				"criteria" : Criteria1,
+			},
+	MapFn = lambda r : tuple(str(f) for f in r)
+  )
+Iter2 = SQLIter \
+  (
+	Conn = Conn,
+	Cmd =
+			"select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(fieldnames)s"
+		%
+			{
+				"fieldnames" : ", ".join(FieldNames),
+				"tablespec" : TableSpec,
+				"criteria" : Criteria2,
+			},
+	MapFn = lambda r : tuple(str(f) for f in r)
+  )
+Count1 = 0
+Count2 = 0
+CountDiff = 0
+while True :
+	if Iter1 != None :
+		try :
+			Record1 = Iter1.next()
+		except StopIteration :
+			Record1 = None
+			Iter1 = None
+		#end try
+	#end if
+	if Iter2 != None :
+		try :
+			Record2 = Iter2.next()
+		except StopIteration :
+			Record2 = None
+			Iter2 = None
+		#end try
+	#end if
+	if Record1 != None :
+		# apply Remap
+		for FieldIndex, FieldName in enumerate(FieldNames) :
+			Mapping = Remap.get(FieldName)
+			if Mapping != None :
+				NewValue = Mapping.get(Record1[FieldIndex])
+				if NewValue != None :
+					Record1 = Record1[:FieldIndex] + (NewValue,) + Record1[FieldIndex + 1:]
+				#end if
+			#end if
+		#end for
+	#end if
+	if Record1 != None :
+		Count1 += 1
+	#end if
+	if Record2 != None :
+		Count2 += 1
+	#end if
+	if (Record1 != None or Record2 != None) and Record1 != Record2 :
+		sys.stdout.write("Mismatch: %s vs %s\n" % (repr(Record1), repr(Record2)))
+		CountDiff += 1
+	#end if
+	if Iter1 == None and Iter2 == None :
+		break
+#end while
+sys.stdout.write("Records examined: %d vs %d, diffs found %d\n" % (Count1, Count2, CountDiff))
+
+Conn.close()
