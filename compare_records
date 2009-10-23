@@ -4,7 +4,7 @@
 # Invoke it as follows:
 #
 #     compare_records [--user=username] [--password=password] [--host=host] [--port=port]
-#         [--database=database] [--order1=order1] [--order2=order2]
+#         [--database=database] [--order=order] [--order1=order1] [--order2=order2]
 #         remap...
 #         field_names
 #         table_spec
@@ -30,8 +30,9 @@
 # This means that value1 for field in the first record set is to be taken as equivalent to
 # value2 for field in the second record set.
 #
-# The optional order1 and order2 specifications define the respective ordering of the records
-# for comparison purposes. If omitted, then the fieldname list is used.
+# The optional order, order1 and order2 specifications define the respective ordering of the
+# records for comparison purposes; order for both sets of records, order1 for the first set,
+# order2 for the second set. If omitted, then the fieldname list is used.
 #
 # Written by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>.
 #-
@@ -77,6 +78,7 @@ def SQLIter(Conn, Cmd, Values = None, MapFn = None) :
 		"password=",
 		"port=",
 		"user=",
+		"order=",
 		"order1=",
 		"order2=",
 		"remap=",
@@ -91,6 +93,7 @@ if len(Args) != 4 :
 (ArgFieldNames, TableSpec, Criteria1, Criteria2) = Args
 ConnParams = {}
 Remap = {}
+Order = None
 Order1 = None
 Order2 = None
 for Keyword, Value in Opts :
@@ -104,6 +107,8 @@ for Keyword, Value in Opts :
 		ConnParams["user"] = Value
 	elif Keyword == "--password" :
 		ConnParams["passwd"] = Value
+	elif Keyword == "--order" :
+		Order = Value
 	elif Keyword == "--order1" :
 		Order1 = Value
 	elif Keyword == "--order2" :
@@ -152,6 +157,12 @@ for Entry in ArgFieldNames.split(",") :
 		FieldNames.append(Entry)
 	#end if
 #end for
+if Order1 == None :
+	Order1 = Order
+#end if
+if Order2 == None :
+	Order2 = Order
+#end if
 if Order1 == None :
 	Order1 = ", ".join(FieldNames)
 #end if
