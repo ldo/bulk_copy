@@ -140,7 +140,11 @@ in \
 :
 	NrChecked += 1
 	InValue = InFields[0]
-	OutValue = InValue.decode(src_encoding).encode(dst_encoding)
+	if InValue != None :
+		OutValue = InValue.decode(src_encoding).encode(dst_encoding)
+	else :
+		OutValue = None
+	#end if
 	if OutValue != InValue :
 		NrChanged += 1
 		sys.stdout.write \
