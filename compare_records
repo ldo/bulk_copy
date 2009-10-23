@@ -4,7 +4,7 @@
 # Invoke it as follows:
 #
 #     compare_records [--user=username] [--password=password] [--host=host] [--port=port]
-#         [--database=database]
+#         [--database=database] [--order1=order1] [--order2=order2]
 #         remap...
 #         field_names
 #         table_spec
@@ -29,6 +29,9 @@
 #
 # This means that value1 for field in the first record set is to be taken as equivalent to
 # value2 for field in the second record set.
+#
+# The optional order1 and order2 specifications define the respective ordering of the records
+# for comparison purposes. If omitted, then the fieldname list is used.
 #
 # Written by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>.
 #-
@@ -74,6 +77,8 @@ def SQLIter(Conn, Cmd, Values = None, MapFn = None) :
 		"password=",
 		"port=",
 		"user=",
+		"order1=",
+		"order2=",
 		"remap=",
 	]
   )
@@ -86,6 +91,8 @@ if len(Args) != 4 :
 (ArgFieldNames, TableSpec, Criteria1, Criteria2) = Args
 ConnParams = {}
 Remap = {}
+Order1 = None
+Order2 = None
 for Keyword, Value in Opts :
 	if Keyword == "--database" :
 		ConnParams["db"] = Value
@@ -97,6 +104,10 @@ for Keyword, Value in Opts :
 		ConnParams["user"] = Value
 	elif Keyword == "--password" :
 		ConnParams["passwd"] = Value
+	elif Keyword == "--order1" :
+		Order1 = Value
+	elif Keyword == "--order2" :
+		Order2 = Value
 	elif Keyword == "--remap" :
 		(RemapField, RemapValue1, RemapValue2) = Value.split(":", 2)
 		if not Remap.has_key(RemapField) :
@@ -141,17 +152,24 @@ for Entry in ArgFieldNames.split(",") :
 		FieldNames.append(Entry)
 	#end if
 #end for
+if Order1 == None :
+	Order1 = ", ".join(FieldNames)
+#end if
+if Order2 == None :
+	Order2 = ", ".join(FieldNames)
+#end if
 
 Iter1 = SQLIter \
   (
 	Conn = Conn,
 	Cmd =
-			"select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(fieldnames)s"
+			"select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(order)s"
 		%
 			{
 				"fieldnames" : ", ".join(FieldNames),
 				"tablespec" : TableSpec,
 				"criteria" : Criteria1,
+				"order" : Order1,
 			},
 	MapFn = lambda r : tuple(str(f) for f in r)
   )
@@ -159,12 +177,13 @@ Iter2 = SQLIter \
   (
 	Conn = Conn,
 	Cmd =
-			"select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(fieldnames)s"
+			"select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(order)s"
 		%
 			{
 				"fieldnames" : ", ".join(FieldNames),
 				"tablespec" : TableSpec,
 				"criteria" : Criteria2,
+				"order" : Order2,
 			},
 	MapFn = lambda r : tuple(str(f) for f in r)
   )
