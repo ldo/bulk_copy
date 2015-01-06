@@ -34,7 +34,8 @@
 # records for comparison purposes; order for both sets of records, order1 for the first set,
 # order2 for the second set. If omitted, then the fieldname list is used.
 #
-# Written by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>.
+# Copyright 2009 by Lawrence D’Oliveiro <ldo@geek-central.gen.nz>.
+# Licensed under CC-BY-SA <http://creativecommons.org/licenses/by-sa/4.0/>.
 #-
 
 import sys

@@ -18,7 +18,8 @@
 # to encoding dst_encoding. If --convert is specified, then the field values will be updated;
 # otherwise the script will only report which field values need changing.
 #
-# Written by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>.
+# Copyright 2009 by Lawrence D’Oliveiro <ldo@geek-central.gen.nz>.
+# Licensed under CC-BY-SA <http://creativecommons.org/licenses/by-sa/4.0/>.
 #-
 
 import sys
