@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #+
 # This script does text conversion on values of a specified field in a table of
 # a MySQL database. Invoke this script as follows:
@@ -18,12 +18,12 @@
 # to encoding dst_encoding. If --convert is specified, then the field values will be updated;
 # otherwise the script will only report which field values need changing.
 #
-# Copyright 2009 by Lawrence D’Oliveiro <ldo@geek-central.gen.nz>.
+# Copyright 2009, 2015 by Lawrence D’Oliveiro <ldo@geek-central.gen.nz>.
 # Licensed under CC-BY-SA <http://creativecommons.org/licenses/by-sa/4.0/>.
 #-
 
 import sys
-import MySQLdb
+import mysql.connector
 import getopt
 import getpass
 
@@ -74,6 +74,11 @@ def SQLString(Str) :
     return "\"" + "".join(Result) + "\""
 #end SQLString
 
+def SQLByteString(Val) :
+    return \
+        "X'" + "".join("%02X" % i for i in Val) + "'"
+#end SQLByteString
+
 #+
 # Mainline
 #-
@@ -99,7 +104,7 @@ if len(Args) != 5 :
 #end if
 (table_name, id_field_names, field_name, src_encoding, dst_encoding) = Args
 id_field_names = tuple(id_field_names.split(","))
-ConnParams = {}
+ConnParams = {"buffered" : True} # needed to avoid “unread result found” errors
 DoConvert = False
 for Keyword, Value in Opts :
     if Keyword == "--database" :
@@ -119,7 +124,8 @@ for Keyword, Value in Opts :
 if ConnParams.get("passwd") == "" :
     ConnParams["passwd"] = getpass.getpass()
 #end if
-Conn = MySQLdb.Connection(**ConnParams)
+Conn = mysql.connector.Connect(**ConnParams)
+Conn.set_unicode(False)
 
 UpdateCursor = None
 NrChecked = 0
@@ -164,7 +170,7 @@ in \
                             for i in range(0, len(id_field_names))
                           ),
                     "old" : SQLString(InValue),
-                    "new" : SQLString(OutValue),
+                    "new" : SQLByteString(OutValue),
                 }
           )
         if DoConvert :
@@ -178,7 +184,7 @@ in \
                     {
                         "table" : table_name,
                         "field" : field_name,
-                        "value" : SQLString(OutValue),
+                        "value" : SQLByteString(OutValue),
                         "identify" : " and ".join
                           (
                                 "%(field)s = %(value)s"
