@@ -31,21 +31,13 @@ import getpass
 # Useful MySQL stuff
 #-
 
-def SQLIter(Conn, Cmd, Values = None, MapFn = None) :
+def SQLIter(Conn, Cmd, Values = None, MapFn = lambda x : x) :
     """generator which executes Cmd with Values in a new cursor on Conn,
     yielding the rows one at a time, optionally mapped through function MapFn."""
-    if MapFn == None :
-        MapFn = lambda x : x
-    #end if
     Cursor = Conn.cursor()
     Cursor.execute(Cmd, Values)
     while True :
-        NextRow = Cursor.fetchone()
-        if NextRow == None :
-            Cursor.close()
-            raise StopIteration
-        #end if
-        yield MapFn(NextRow)
+        yield MapFn(next(Cursor))
     #end while
 #end SQLIter
 
