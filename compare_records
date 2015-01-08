@@ -47,21 +47,21 @@ import getpass
 # Useful MySQL stuff
 #-
 
-def SQLIter(Conn, Cmd, Values = None, MapFn = lambda x : x) :
-    """generator which executes Cmd with Values in a new cursor on Conn,
-    yielding the rows one at a time, optionally mapped through function MapFn."""
-    Cursor = Conn.cursor()
-    Cursor.execute(Cmd, Values)
+def sql_iter(conn, cmd, values = None, mapfn = lambda x : x) :
+    """generator which executes cmd with values in a new cursor on conn,
+    yielding the rows one at a time, optionally mapped through function mapfn."""
+    cursor = conn.cursor()
+    cursor.execute(cmd, values)
     while True :
-        yield MapFn(next(Cursor))
+        yield mapfn(next(cursor))
     #end while
-#end SQLIter
+#end sql_iter
 
 #+
 # Mainline
 #-
 
-(Opts, Args) = getopt.getopt \
+(opts, args) = getopt.getopt \
   (
     sys.argv[1:],
     "",
@@ -77,161 +77,161 @@ def SQLIter(Conn, Cmd, Values = None, MapFn = lambda x : x) :
         "remap=",
     ]
   )
-if len(Args) != 4 :
+if len(args) != 4 :
     raise getopt.GetoptError \
       (
         "need field_names, table_spec, criteria1 and criteria2 args"
       )
 #end if
-(ArgFieldNames, TableSpec, Criteria1, Criteria2) = Args
-ConnParams = {"buffered" : True}
-Remap = {}
-Order = None
-Order1 = None
-Order2 = None
-for Keyword, Value in Opts :
-    if Keyword == "--database" :
-        ConnParams["db"] = Value
-    elif Keyword == "--host" :
-        ConnParams["host"] = Value
-    elif Keyword == "--port" :
-        ConnParams["port"] = int(Value)
-    elif Keyword == "--user" :
-        ConnParams["user"] = Value
-    elif Keyword == "--password" :
-        ConnParams["passwd"] = Value
-    elif Keyword == "--order" :
-        Order = Value
-    elif Keyword == "--order1" :
-        Order1 = Value
-    elif Keyword == "--order2" :
-        Order2 = Value
-    elif Keyword == "--remap" :
-        (RemapField, RemapValue1, RemapValue2) = Value.split(":", 2)
-        if not Remap.has_key(RemapField) :
-            Remap[RemapField] = {}
+(arg_field_names, table_spec, criteria1, criteria2) = args
+conn_params = {"buffered" : True}
+remap = {}
+order = None
+order1 = None
+order2 = None
+for keyword, value in opts :
+    if keyword == "--database" :
+        conn_params["db"] = value
+    elif keyword == "--host" :
+        conn_params["host"] = value
+    elif keyword == "--port" :
+        conn_params["port"] = int(value)
+    elif keyword == "--user" :
+        conn_params["user"] = value
+    elif keyword == "--password" :
+        conn_params["passwd"] = value
+    elif keyword == "--order" :
+        order = value
+    elif keyword == "--order1" :
+        order1 = value
+    elif keyword == "--order2" :
+        order2 = value
+    elif keyword == "--remap" :
+        (remap_field, remap_value1, remap_value2) = value.split(":", 2)
+        if not remap.has_key(remap_field) :
+            remap[remap_field] = {}
         #end if
-        Remap[RemapField][RemapValue1] = RemapValue2
+        remap[remap_field][remap_value1] = remap_value2
     #end if
 #end for
-if ConnParams.get("passwd") == "" :
-    ConnParams["passwd"] = getpass.getpass()
+if conn_params.get("passwd") == "" :
+    conn_params["passwd"] = getpass.getpass()
 #end if
-Conn = mysql.connector.Connect(**ConnParams)
-FieldNames = []
-for Entry in ArgFieldNames.split(",") :
-    if Entry == "*" :
-        FieldNames.extend \
+conn = mysql.connector.connect(**conn_params)
+field_names = []
+for entry in arg_field_names.split(",") :
+    if entry == "*" :
+        field_names.extend \
           (
-            SQLIter
+            sql_iter
               (
-                Conn = Conn,
-                Cmd = "show columns from %s" % TableSpec,
-                MapFn = lambda x : x[0]
+                conn = conn,
+                cmd = "show columns from %s" % table_spec,
+                mapfn = lambda x : x[0]
               )
           )
-    elif Entry.endswith(".*") :
-        TableName = Entry[:-2]
-        FieldNames.extend \
+    elif entry.endswith(".*") :
+        table_name = entry[:-2]
+        field_names.extend \
           (
-            SQLIter
+            sql_iter
               (
-                Conn = Conn,
-                Cmd = "show columns from %s" % TableName,
-                MapFn = lambda x : TableName + "." + x[0]
+                conn = conn,
+                cmd = "show columns from %s" % table_name,
+                mapfn = lambda x : table_name + "." + x[0]
               )
           )
-    elif Entry.startswith("-") :
-        FieldNames = list \
+    elif entry.startswith("-") :
+        field_names = list \
           (
-            f for f in FieldNames if f != Entry[1:]
+            f for f in field_names if f != entry[1:]
           )
     else :
-        FieldNames.append(Entry)
+        field_names.append(entry)
     #end if
 #end for
-if Order1 == None :
-    Order1 = Order
+if order1 == None :
+    order1 = order
 #end if
-if Order2 == None :
-    Order2 = Order
+if order2 == None :
+    order2 = order
 #end if
-if Order1 == None :
-    Order1 = ", ".join(FieldNames)
+if order1 == None :
+    order1 = ", ".join(field_names)
 #end if
-if Order2 == None :
-    Order2 = ", ".join(FieldNames)
+if order2 == None :
+    order2 = ", ".join(field_names)
 #end if
 
-Iter1 = SQLIter \
+iter1 = sql_iter \
   (
-    Conn = Conn,
-    Cmd =
+    conn = conn,
+    cmd =
             "select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(order)s"
         %
             {
-                "fieldnames" : ", ".join(FieldNames),
-                "tablespec" : TableSpec,
-                "criteria" : Criteria1,
-                "order" : Order1,
+                "fieldnames" : ", ".join(field_names),
+                "tablespec" : table_spec,
+                "criteria" : criteria1,
+                "order" : order1,
             },
-    MapFn = lambda r : tuple(str(f) for f in r)
+    mapfn = lambda r : tuple(str(f) for f in r)
   )
-Iter2 = SQLIter \
+iter2 = sql_iter \
   (
-    Conn = Conn,
-    Cmd =
+    conn = conn,
+    cmd =
             "select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(order)s"
         %
             {
-                "fieldnames" : ", ".join(FieldNames),
-                "tablespec" : TableSpec,
-                "criteria" : Criteria2,
-                "order" : Order2,
+                "fieldnames" : ", ".join(field_names),
+                "tablespec" : table_spec,
+                "criteria" : criteria2,
+                "order" : order2,
             },
-    MapFn = lambda r : tuple(str(f) for f in r)
+    mapfn = lambda r : tuple(str(f) for f in r)
   )
-Count1 = 0
-Count2 = 0
-CountDiff = 0
+count1 = 0
+count2 = 0
+count_diff = 0
 while True :
-    if Iter1 != None :
-        Record1 = next(Iter1, None)
-        if Record1 == None :
-            Iter1 = None
+    if iter1 != None :
+        record1 = next(iter1, None)
+        if record1 == None :
+            iter1 = None
         #end if
     #end if
-    if Iter2 != None :
-        Record2 = next(Iter2, None)
-        if Record2 == None :
-            Iter2 = None
+    if iter2 != None :
+        record2 = next(iter2, None)
+        if record2 == None :
+            iter2 = None
         #end if
     #end if
-    if Record1 != None :
-        # apply Remap
-        for FieldIndex, FieldName in enumerate(FieldNames) :
-            Mapping = Remap.get(FieldName)
-            if Mapping != None :
-                NewValue = Mapping.get(Record1[FieldIndex])
-                if NewValue != None :
-                    Record1 = Record1[:FieldIndex] + (NewValue,) + Record1[FieldIndex + 1:]
+    if record1 != None :
+        # apply remap
+        for field_index, field_name in enumerate(field_names) :
+            mapping = remap.get(field_name)
+            if mapping != None :
+                new_value = mapping.get(record1[field_index])
+                if new_value != None :
+                    record1 = record1[:field_index] + (new_value,) + record1[field_index + 1:]
                 #end if
             #end if
         #end for
     #end if
-    if Record1 != None :
-        Count1 += 1
+    if record1 != None :
+        count1 += 1
     #end if
-    if Record2 != None :
-        Count2 += 1
+    if record2 != None :
+        count2 += 1
     #end if
-    if (Record1 != None or Record2 != None) and Record1 != Record2 :
-        sys.stdout.write("Mismatch: %s vs %s\n" % (repr(Record1), repr(Record2)))
-        CountDiff += 1
+    if (record1 != None or record2 != None) and record1 != record2 :
+        sys.stdout.write("Mismatch: %s vs %s\n" % (repr(record1), repr(record2)))
+        count_diff += 1
     #end if
-    if Iter1 == None and Iter2 == None :
+    if iter1 == None and iter2 == None :
         break
 #end while
-sys.stdout.write("Records examined: %d vs %d, diffs found %d\n" % (Count1, Count2, CountDiff))
+sys.stdout.write("Records examined: %d vs %d, diffs found %d\n" % (count1, count2, count_diff))
 
-Conn.close()
+conn.close()

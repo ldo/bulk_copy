@@ -11,7 +11,7 @@
 # If --password is specified but an empty value is given, then the user will be prompted for
 # the password without echoing.
 #
-# table_name is the name of the table, id_field_name is the name of a unique-valued field
+# table_name is the name of the table, id_field_names is the name of a unique-valued field
 # (or comma-separated list of fields with a unique-valued combination of values) identifying
 # each record for update purposes, and field_name is the name of the field in that table
 # to check. The values are assumed to be in encoding src_encoding, and they will be converted
@@ -31,51 +31,51 @@ import getpass
 # Useful MySQL stuff
 #-
 
-def SQLIter(Conn, Cmd, Values = None, MapFn = lambda x : x) :
-    """generator which executes Cmd with Values in a new cursor on Conn,
-    yielding the rows one at a time, optionally mapped through function MapFn."""
-    Cursor = Conn.cursor()
-    Cursor.execute(Cmd, Values)
+def sql_iter(conn, cmd, values = None, mapfn = lambda x : x) :
+    """generator which executes cmd with values in a new cursor on conn,
+    yielding the rows one at a time, optionally mapped through function mapfn."""
+    cursor = conn.cursor()
+    cursor.execute(cmd, values)
     while True :
-        yield MapFn(next(Cursor))
+        yield mapfn(next(cursor))
     #end while
-#end SQLIter
+#end sql_iter
 
-def SQLString(Str) :
-    """returns a MySQL string literal which evaluates to Str. Needed
-    for those times when MySQLdb's automatic quoting isn't good enough."""
-    Result = []
-    for Ch in str(Str) :
-        if Ch == "\0" :
-            Ch = "\\0"
-        elif Ch == "\010" :
-            Ch = "\\b"
-        elif Ch == "\011" :
-            Ch = "\\t"
-        elif Ch == "\012" :
-            Ch = "\\n"
-        elif Ch == "\015" :
-            Ch = "\\r"
-        elif Ch == "\032" :
-            Ch = "\\z"
-        elif Ch == "'" or Ch == "\"" or Ch == "\\" :
-            Ch = "\\" + Ch
+def sql_string(s) :
+    """returns a MySQL string literal which evaluates to s. Needed
+    for those times when the client API's automatic quoting isn't good enough."""
+    result = []
+    for ch in str(s) :
+        if ch == "\0" :
+            ch = "\\0"
+        elif ch == "\010" :
+            ch = "\\b"
+        elif ch == "\011" :
+            ch = "\\t"
+        elif ch == "\012" :
+            ch = "\\n"
+        elif ch == "\015" :
+            ch = "\\r"
+        elif ch == "\032" :
+            ch = "\\z"
+        elif ch == "'" or ch == "\"" or ch == "\\" :
+            ch = "\\" + ch
         #end if
-        Result.append(Ch)
+        result.append(ch)
     #end for
-    return "\"" + "".join(Result) + "\""
-#end SQLString
+    return "\"" + "".join(result) + "\""
+#end sql_string
 
-def SQLByteString(Val) :
+def sql_byte_string(val) :
     return \
-        "X'" + "".join("%02X" % i for i in Val) + "'"
-#end SQLByteString
+        "X'" + "".join("%02X" % i for i in val) + "'"
+#end sql_byte_string
 
 #+
 # Mainline
 #-
 
-(Opts, Args) = getopt.getopt \
+(opts, args) = getopt.getopt \
   (
     sys.argv[1:],
     "",
@@ -88,47 +88,47 @@ def SQLByteString(Val) :
         "convert",
     ]
   )
-if len(Args) != 5 :
+if len(args) != 5 :
     raise getopt.GetoptError \
       (
         "need table_name, field_name, src_encoding and dst_encoding args"
       )
 #end if
-(table_name, id_field_names, field_name, src_encoding, dst_encoding) = Args
+(table_name, id_field_names, field_name, src_encoding, dst_encoding) = args
 id_field_names = tuple(id_field_names.split(","))
-ConnParams = {"buffered" : True} # needed to avoid “unread result found” errors
-DoConvert = False
-for Keyword, Value in Opts :
-    if Keyword == "--database" :
-        ConnParams["db"] = Value
-    elif Keyword == "--host" :
-        ConnParams["host"] = Value
-    elif Keyword == "--port" :
-        ConnParams["port"] = int(Value)
-    elif Keyword == "--user" :
-        ConnParams["user"] = Value
-    elif Keyword == "--password" :
-        ConnParams["passwd"] = Value
-    elif Keyword == "--convert" :
-        DoConvert = True
+conn_params = {"buffered" : True} # needed to avoid “unread result found” errors
+do_convert = False
+for keyword, value in opts :
+    if keyword == "--database" :
+        conn_params["db"] = value
+    elif keyword == "--host" :
+        conn_params["host"] = value
+    elif keyword == "--port" :
+        conn_params["port"] = int(value)
+    elif keyword == "--user" :
+        conn_params["user"] = value
+    elif keyword == "--password" :
+        conn_params["passwd"] = value
+    elif keyword == "--convert" :
+        do_convert = True
     #end if
 #end for
-if ConnParams.get("passwd") == "" :
-    ConnParams["passwd"] = getpass.getpass()
+if conn_params.get("passwd") == "" :
+    conn_params["passwd"] = getpass.getpass()
 #end if
-Conn = mysql.connector.Connect(**ConnParams)
-Conn.set_unicode(False)
+conn = mysql.connector.connect(**conn_params)
+conn.set_unicode(False)
 
-UpdateCursor = None
-NrChecked = 0
-NrChanged = 0
+update_cursor = None
+nr_checked = 0
+nr_changed = 0
 for \
-    InFields \
+    in_fields \
 in \
-    SQLIter \
+    sql_iter \
       (
-        Conn = Conn,
-        Cmd =
+        conn = conn,
+        cmd =
                 "select %(fields)s from %(table)s"
             %
                 {
@@ -137,15 +137,15 @@ in \
                 }
       ) \
 :
-    NrChecked += 1
-    InValue = InFields[0]
-    if InValue != None :
-        OutValue = InValue.decode(src_encoding).encode(dst_encoding)
+    nr_checked += 1
+    in_value = in_fields[0]
+    if in_value != None :
+        out_value = in_value.decode(src_encoding).encode(dst_encoding)
     else :
-        OutValue = None
+        out_value = None
     #end if
-    if OutValue != InValue :
-        NrChanged += 1
+    if out_value != in_value :
+        nr_changed += 1
         sys.stdout.write \
           (
                 "(%(identify)s): %(old)s => %(new)s\n"
@@ -157,33 +157,33 @@ in \
                             %
                                 {
                                     "field" : id_field_names[i],
-                                    "value" : SQLString(InFields[i + 1]),
+                                    "value" : sql_string(in_fields[i + 1]),
                                 }
                             for i in range(0, len(id_field_names))
                           ),
-                    "old" : SQLString(InValue),
-                    "new" : SQLByteString(OutValue),
+                    "old" : sql_string(in_value),
+                    "new" : sql_byte_string(out_value),
                 }
           )
-        if DoConvert :
-            if UpdateCursor == None :
-                UpdateCursor = Conn.cursor()
+        if do_convert :
+            if update_cursor == None :
+                update_cursor = conn.cursor()
             #end if
-            UpdateCursor.execute \
+            update_cursor.execute \
               (
                     "update %(table)s set %(field)s = %(value)s where %(identify)s"
                 %
                     {
                         "table" : table_name,
                         "field" : field_name,
-                        "value" : SQLByteString(OutValue),
+                        "value" : sql_byte_string(out_value),
                         "identify" : " and ".join
                           (
                                 "%(field)s = %(value)s"
                             %
                                 {
                                     "field" : id_field_names[i],
-                                    "value" : SQLString(InFields[i + 1]),
+                                    "value" : sql_string(in_fields[i + 1]),
                                 }
                             for i in range(0, len(id_field_names))
                           ),
@@ -192,8 +192,8 @@ in \
         #end if
     #end if
 #end for
-if UpdateCursor != None :
-    UpdateCursor.close()
+if update_cursor != None :
+    update_cursor.close()
 #end if
-Conn.close()
-sys.stdout.write("Changed/Checked = %d/%d\n" % (NrChanged, NrChecked))
+conn.close()
+sys.stdout.write("Changed/Checked = %d/%d\n" % (nr_changed, nr_checked))

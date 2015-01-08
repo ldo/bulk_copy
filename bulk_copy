@@ -41,113 +41,113 @@ import getpass
 # Useful MySQL stuff
 #-
 
-def SQLIter(Conn, Cmd, Values = None, MapFn = lambda x : x) :
-    """generator which executes Cmd with Values in a new cursor on Conn,
-    yielding the rows one at a time, optionally mapped through function MapFn."""
-    Cursor = Conn.cursor()
-    Cursor.execute(Cmd, Values)
+def sql_iter(conn, cmd, values = None, mapfn = lambda x : x) :
+    """generator which executes cmd with values in a new cursor on conn,
+    yielding the rows one at a time, optionally mapped through function mapfn."""
+    cursor = conn.cursor()
+    cursor.execute(cmd, values)
     while True :
-        yield MapFn(next(Cursor))
+        yield mapfn(next(cursor))
     #end while
-#end SQLIter
+#end sql_iter
 
-def SQLString(Str) :
-    """returns a MySQL string literal which evaluates to Str. Needed
-    for those times when MySQLdb's automatic quoting isn't good enough."""
-    Result = []
-    for Ch in str(Str) :
-        if Ch == "\0" :
-            Ch = "\\0"
-        elif Ch == "\010" :
-            Ch = "\\b"
-        elif Ch == "\011" :
-            Ch = "\\t"
-        elif Ch == "\012" :
-            Ch = "\\n"
-        elif Ch == "\015" :
-            Ch = "\\r"
-        elif Ch == "\032" :
-            Ch = "\\z"
-        elif Ch == "'" or Ch == "\"" or Ch == "\\" :
-            Ch = "\\" + Ch
+def sql_string(s) :
+    """returns a MySQL string literal which evaluates to s. Needed
+    for those times when the client API's automatic quoting isn't good enough."""
+    result = []
+    for ch in str(s) :
+        if ch == "\0" :
+            ch = "\\0"
+        elif ch == "\010" :
+            ch = "\\b"
+        elif ch == "\011" :
+            ch = "\\t"
+        elif ch == "\012" :
+            ch = "\\n"
+        elif ch == "\015" :
+            ch = "\\r"
+        elif ch == "\032" :
+            ch = "\\z"
+        elif ch == "'" or ch == "\"" or ch == "\\" :
+            ch = "\\" + ch
         #end if
-        Result.append(Ch)
+        result.append(ch)
     #end for
-    return "\"" + "".join(Result) + "\""
-#end SQLString
+    return "\"" + "".join(result) + "\""
+#end sql_string
 
 class BulkInserter :
     """bulk insertion of lots of records into an SQL table."""
 
-    def __init__(self, Conn, TableName, FieldNames, IgnoreDuplicates) :
-        """Conn is the MySQL connection to use; TableName is the name of the
-        table into which to insert records; FieldNames is the list of field names;
-        and IgnoreDuplicates is True to ignore duplicate insertions, False to
+    def __init__(self, conn, table_name, field_names, ignore_duplicates) :
+        """conn is the MySQL connection to use; table_name is the name of the
+        table into which to insert records; field_names is the list of field names;
+        and ignore_duplicates is True to ignore duplicate insertions, False to
         report an error."""
-        self.sql = Conn
+        self.sql = conn
         self.cursor = None
-        self.TableName = TableName
-        self.FieldNames = tuple(FieldNames)
-        self.IgnoreDuplicates = IgnoreDuplicates
-        self.InsertLimit = 500 # could even be larger
-        self.FieldValues = []
+        self.table_name = table_name
+        self.field_names = tuple(field_names)
+        self.ignore_duplicates = ignore_duplicates
+        self.insert_limit = 500 # could even be larger
+        self.field_values = []
     #end __init__
 
-    def AddRecord(self, FieldValues) :
-        """adds another record to the table. FieldValues is the list of field
-        values, corresponding in order to the previously-specified FieldNames."""
-        if len(self.FieldValues) == self.InsertLimit :
-            self.DoneInsert()
+    def add_record(self, field_values) :
+        """adds another record to the table. field_values is the list of field
+        values, corresponding in order to the previously-specified field_names."""
+        if len(self.field_values) == self.insert_limit :
+            self.done_insert()
         #end if
         if self.cursor == None :
             self.cursor = self.sql.cursor()
         #end if
-        ThisRecord = []
-        if type(FieldValues) == dict :
-            for FieldName in self.FieldNames :
-                FieldValue = FieldValues[FieldName]
-                if FieldValue != None :
-                    ThisRecord.append(SQLString(FieldValue))
+        this_record = []
+        if type(field_values) == dict :
+            for field_name in self.field_names :
+                field_value = field_values[field_name]
+                if field_value != None :
+                    this_record.append(sql_string(field_value))
                 else :
-                    ThisRecord.append("null")
+                    this_record.append("null")
                 #end if
             #end for
         else :
-            for FieldValue in FieldValues :
-                if FieldValue != None :
-                    ThisRecord.append(SQLString(FieldValue))
+            for field_value in field_values :
+                if field_value != None :
+                    this_record.append(sql_string(field_value))
                 else :
-                    ThisRecord.append("null")
+                    this_record.append("null")
                 #end if
             #end for
         #end if
-        self.FieldValues.append(ThisRecord)
-    #end AddRecord
+        self.field_values.append(this_record)
+    #end add_record
 
-    def DoneInsert(self) :
-        """Call this after the last AddRecord call to make sure all insertions
+    def done_insert(self) :
+        """Call this after the last add_record call to make sure all insertions
         have been flushed to the table."""
-        if len(self.FieldValues) != 0 :
-            Insert = "insert delayed"
-            if self.IgnoreDuplicates :
-                Insert += " ignore"
+        if len(self.field_values) != 0 :
+            insert = "insert delayed"
+            if self.ignore_duplicates :
+                insert += " ignore"
             #end if
-            Insert += " into " + self.TableName + " (" + ", ".join(self.FieldNames) + ") values"
-            FirstInsert = True
-            for ThisRecord in self.FieldValues :
-                if FirstInsert :
-                    FirstInsert = False
+            insert += " into " + self.table_name + " (" + ", ".join(self.field_names) + ") values"
+            first_insert = True
+            for this_record in self.field_values :
+                if first_insert :
+                    first_insert = False
                 else :
-                    Insert += ","
+                    insert += ","
                 #end if
-                Insert += " (" + ", ".join(ThisRecord) + ")"
+                insert += " (" + ", ".join(this_record) + ")"
             #end for
-            self.cursor.execute(Insert)
+            self.cursor.execute(insert)
             self.cursor.close()
             self.cursor = None
-            self.FieldValues = []
+            self.field_values = []
         #end if
-    #end DoneInsert
+    #end done_insert
 
 #end BulkInserter
 
@@ -155,7 +155,7 @@ class BulkInserter :
 # Mainline
 #-
 
-(Opts, Args) = getopt.getopt \
+(opts, args) = getopt.getopt \
   (
     sys.argv[1:],
     "",
@@ -167,52 +167,52 @@ class BulkInserter :
         "user=",
     ]
   )
-if len(Args) < 4 :
+if len(args) < 4 :
     raise getopt.GetoptError \
       (
         "need at least src_table_name, fields, condition and dst_table_name args"
       )
 #end if
-src_table_name = Args[0]
-field_names = Args[1].split(",")
-condition = Args[2]
-dst_table_name = Args[3]
+src_table_name = args[0]
+field_names = args[1].split(",")
+condition = args[2]
+dst_table_name = args[3]
 replace_field_names = []
 replace_field_values = []
-for Field in Args[4:] :
-    FieldName, Value = Field.split("=", 1)
-    if FieldName in field_names :
-        raise getopt.GetoptError("can't both copy and replace field %s" % FieldName)
+for field in args[4:] :
+    field_name, value = field.split("=", 1)
+    if field_name in field_names :
+        raise getopt.GetoptError("can't both copy and replace field %s" % field_name)
     #end if
-    replace_field_names.append(FieldName)
-    replace_field_values.append(Value)
+    replace_field_names.append(field_name)
+    replace_field_values.append(value)
 #end for
-ConnParams = {"buffered" : True} # needed to avoid “unread result found” errors
-for Keyword, Value in Opts :
-    if Keyword == "--database" :
-        ConnParams["db"] = Value
-    elif Keyword == "--host" :
-        ConnParams["host"] = Value
-    elif Keyword == "--port" :
-        ConnParams["port"] = int(Value)
-    elif Keyword == "--user" :
-        ConnParams["user"] = Value
-    elif Keyword == "--password" :
-        ConnParams["passwd"] = Value
+conn_params = {"buffered" : True} # needed to avoid “unread result found” errors
+for keyword, value in opts :
+    if keyword == "--database" :
+        conn_params["db"] = value
+    elif keyword == "--host" :
+        conn_params["host"] = value
+    elif keyword == "--port" :
+        conn_params["port"] = int(value)
+    elif keyword == "--user" :
+        conn_params["user"] = value
+    elif keyword == "--password" :
+        conn_params["passwd"] = value
     #end if
 #end for
-if ConnParams.get("passwd") == "" :
-    ConnParams["passwd"] = getpass.getpass()
+if conn_params.get("passwd") == "" :
+    conn_params["passwd"] = getpass.getpass()
 #end if
-Conn = mysql.connector.Connect(**ConnParams)
+conn = mysql.connector.connect(**conn_params)
 if len(field_names) == 1 and field_names[0] == "*" :
     field_names = list \
       (
-            set(SQLIter
+            set(sql_iter
               (
-                Conn = Conn,
-                Cmd = "show columns from %s" % src_table_name,
-                MapFn = lambda x : x[0]
+                conn = conn,
+                cmd = "show columns from %s" % src_table_name,
+                mapfn = lambda x : x[0]
               ))
         -
             set(replace_field_names)
@@ -221,14 +221,14 @@ if len(field_names) == 1 and field_names[0] == "*" :
 all_field_names = field_names + replace_field_names
 
 nr_records = 0
-Insert = BulkInserter(Conn, dst_table_name, all_field_names, False)
+insert = BulkInserter(conn, dst_table_name, all_field_names, False)
 for \
-        Entry \
+        entry \
     in \
-        SQLIter \
+        sql_iter \
           (
-            Conn = Conn,
-            Cmd =
+            conn = conn,
+            cmd =
                     "select %(fields)s from %(table)s where %(condition)s"
                 %
                     {
@@ -238,10 +238,10 @@ for \
                     }
           ) \
 :
-    Insert.AddRecord(list(Entry) + replace_field_values)
+    insert.add_record(list(entry) + replace_field_values)
     nr_records += 1
 #end for
-Insert.DoneInsert()
+insert.done_insert()
 sys.stderr.write("records inserted: %s\n" % nr_records)
 
-Conn.close()
+conn.close()
