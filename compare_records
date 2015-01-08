@@ -108,7 +108,7 @@ for keyword, value in opts :
         order2 = value
     elif keyword == "--remap" :
         (remap_field, remap_value1, remap_value2) = value.split(":", 2)
-        if not remap.has_key(remap_field) :
+        if remap_field not in remap :
             remap[remap_field] = {}
         #end if
         remap[remap_field][remap_value1] = remap_value2
