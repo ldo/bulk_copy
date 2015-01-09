@@ -71,6 +71,7 @@
 import sys
 from collections import \
     OrderedDict
+import re
 import mysql.connector
 import apsw as sqlite
 import getopt
@@ -129,12 +130,22 @@ class AbstractDBMS :
             self.conn.cursor()
     #end cursor
 
-    def get_columns(self, table_name) :
-        "returns an OrderedDict mapping column names to definitions for the specified table." \
-        " Each column definition is a dict containing at least type, not_null, default and key" \
-        " information."
+    def iter_table_names(self) :
+        "yields a list of table names."
+        return NotImplementedError
+    #end iter_table_names
+
+    def iter_columns(self, table_name) :
+        "yields column definitions for the specified table." \
+        " Each column definition is a dict containing at least type, not_null, default and" \
+        " (if appropriate) primary_key_seq information."
         raise NotImplementedError
-    #end get_columns
+    #end iter_columns
+
+    def iter_keys(self, table_name) :
+        "yields information about non-primary keys for the specified table."
+        return NotImplementedError
+    #end iter_keys
 
 #end AbstractDBMS
 
@@ -200,23 +211,54 @@ class MySQLDBMS(AbstractDBMS) :
         #end while
     #end iter
 
-    def get_columns(self, table_name) :
-        result = OrderedDict()
+    def iter_table_names(self) :
+        "note this will only work if there is a default database."
+        return \
+            self.iter(cmd = "show tables", mapfn = lambda x : x[0])
+    #end iter_table_names
+
+    def iter_columns(self, table_name) :
+        primary_key_seq = {}
+        for item in self.iter(cmd = "show keys from %s where key_name = 'PRIMARY'" % table_name) :
+            name = item[4]
+            primary_key_seq[name] = item[3]
+        #end for
         for item in self.iter(cmd = "show columns from %s" % table_name) :
             name = item[0]
-            col = {"type" : item[1], "not_null" : item[2] != "NO", "default" : item[4]}
-            result[name] = col
+            col = {"name" : name, "type" : item[1], "not_null" : item[2] != "NO", "default" : item[4]}
+            if name in primary_key_seq :
+                col["primary_key_seq"] = primary_key_seq[name]
+            #end if
+            yield col
         #end for
-        for item in self.iter(cmd = "show keys from %s" % table_name) :
-            name = item[4]
-            col = result[name]
-            col["unique"] = item[1] == 0
-            col["key_name"] = item[2] # will be “PRIMARY” for primary key
-            col["key_seq"] = item[3]
-        #end for
-        return \
-            result
-    #end get_columns
+    #end iter_columns
+
+    def iter_keys(self, table_name) :
+        keys = self.iter(cmd = "show keys from %s where key_name != 'PRIMARY'" % table_name)
+        last_key_name = None
+        while True :
+            item = next(keys, None)
+            if item != None :
+                key_name = item[2]
+                unique = item[1] == 0
+                field_name = item[4]
+                key_seq = item[3]
+            #end if
+            if item == None or key_name != last_key_name :
+                if last_key_name != None :
+                    yield entry
+                #end if
+                if item == None :
+                    break
+                entry = {"name" : key_name, "unique" : unique, "fields" : []}
+                last_key_name = key_name
+                last_key_seq = 0
+            #end if
+            assert key_seq == last_key_seq + 1, "key fields not being returned in sequence"
+            entry["fields"].append(field_name)
+            last_key_seq = key_seq
+        #end while
+    #end iter_keys
 
 #end MySQLDBMS
 
@@ -249,22 +291,43 @@ class SQLiteDBMS(AbstractDBMS) :
         #end while
     #end iter
 
-    def get_columns(self, table_name) :
-        result = OrderedDict()
+    def iter_table_names(self) :
+        return \
+            self.iter \
+              (
+                cmd = "select name from sqlite_master where type = 'table'",
+                mapfn = lambda x : x[0]
+              )
+    #end iter_table_names
+
+    def iter_columns(self, table_name) :
         for item in self.iter(cmd = "pragma table_info(%s)" % table_name) :
             name = item[1]
-            col = {"type" : item[2], "not_null" : item[3] != 0, "default" : item[4]}
+            col = {"name" : name, "type" : item[2], "not_null" : item[3] != 0, "default" : item[4]}
             if item[5] != 0 :
-                col["key_name"] = "PRIMARY"
-                col["key_seq"] = item[5]
-                col["key_unique"] = True # always, for primary keys
+                col["primary_key_seq"] = item[5]
             #end if
-            result[name ] = col
+            yield col
         #end for
-        # NYI info about non-primary keys
-        return \
-            result
-    #end get_columns
+    #end iter_columns
+
+    def iter_keys(self, table_name) :
+        for item in \
+            self.iter \
+              (
+                cmd = "select sql from sqlite_master where type = 'index'",
+                mapfn = lambda x : x[0]
+              ) \
+        :
+            match = re.search(r"^create( unique)? index (\w+) on (\w+)\s*\(([^\)]+)\)", item, re.IGNORECASE)
+              # ignore any trailing “where” clause”
+            unique = match.group(1) != None
+            key_name = match.group(2)
+            table_name = match.group(3)
+            fields = list(field.strip() for field in match.group(4).split(","))
+            yield {"name" : key_name, "unique" : unique, "fields" : fields}
+        #end for
+    #end iter_keys
 
 #end SQLiteDBMS
 
@@ -427,7 +490,7 @@ def mainline() :
     if len(field_names) == 1 and field_names[0] == "*" :
         field_names = list \
           (
-                set(field for field in src_conn.get_columns(src_table_name))
+                set(col["name"] for col in src_conn.iter_columns(src_table_name))
             -
                 set(replace_field_names)
           )
