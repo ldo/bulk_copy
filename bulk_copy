@@ -69,6 +69,8 @@
 #-
 
 import sys
+from collections import \
+    OrderedDict
 import mysql.connector
 import apsw as sqlite
 import getopt
@@ -127,11 +129,12 @@ class AbstractDBMS :
             self.conn.cursor()
     #end cursor
 
-    def iter_columns(self, table_name, mapfn = lambda x : x) :
-        "iterates over the column definitions from the specified table." \
-        " The first item in each column definition is always the column name."
+    def get_columns(self, table_name) :
+        "returns an OrderedDict mapping column names to definitions for the specified table." \
+        " Each column definition is a dict containing at least type, not_null, default and key" \
+        " information."
         raise NotImplementedError
-    #end iter_columns
+    #end get_columns
 
 #end AbstractDBMS
 
@@ -197,10 +200,23 @@ class MySQLDBMS(AbstractDBMS) :
         #end while
     #end iter
 
-    def iter_columns(self, table_name, mapfn = lambda x : x) :
+    def get_columns(self, table_name) :
+        result = OrderedDict()
+        for item in self.iter(cmd = "show columns from %s" % table_name) :
+            name = item[0]
+            col = {"type" : item[1], "not_null" : item[2] != "NO", "default" : item[4]}
+            result[name] = col
+        #end for
+        for item in self.iter(cmd = "show keys from %s" % table_name) :
+            name = item[4]
+            col = result[name]
+            col["unique"] = item[1] == 0
+            col["key_name"] = item[2] # will be “PRIMARY” for primary key
+            col["key_seq"] = item[3]
+        #end for
         return \
-            self.iter(cmd = "show columns from %s" % table_name, mapfn = mapfn)
-    #end iter_columns
+            result
+    #end get_columns
 
 #end MySQLDBMS
 
@@ -233,11 +249,22 @@ class SQLiteDBMS(AbstractDBMS) :
         #end while
     #end iter
 
-    def iter_columns(self, table_name, mapfn = lambda x : x) :
-        for col in self.iter(cmd = "pragma table_info(%s)" % table_name) :
-            yield mapfn(col[1:]) # drop column index
+    def get_columns(self, table_name) :
+        result = OrderedDict()
+        for item in self.iter(cmd = "pragma table_info(%s)" % table_name) :
+            name = item[1]
+            col = {"type" : item[2], "not_null" : item[3] != 0, "default" : item[4]}
+            if item[5] != 0 :
+                col["key_name"] = "PRIMARY"
+                col["key_seq"] = item[5]
+                col["key_unique"] = True # always, for primary keys
+            #end if
+            result[name ] = col
         #end for
-    #end iter_columns
+        # NYI info about non-primary keys
+        return \
+            result
+    #end get_columns
 
 #end SQLiteDBMS
 
@@ -400,7 +427,7 @@ def mainline() :
     if len(field_names) == 1 and field_names[0] == "*" :
         field_names = list \
           (
-                set(src_conn.iter_columns(src_table_name, mapfn = lambda x : x[0]))
+                set(field for field in src_conn.get_columns(src_table_name))
             -
                 set(replace_field_names)
           )
