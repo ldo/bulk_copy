@@ -371,7 +371,7 @@ def mainline() :
                   )
             #end if
             if conn_params.get("password") == "" :
-                conn_params["password"] = getpass.getpass()
+                conn_params["password"] = getpass.getpass(prompt = "%s password%s: " % (dbmstype, ("", " for %s" % conn_params.get("database", ""))["database" in conn_params]))
             #end if
             conn = DBMSClass(**conn_params)
             if doing_dst_table :
