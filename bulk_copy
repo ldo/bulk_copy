@@ -1,32 +1,68 @@
 #!/usr/bin/python3
 #+
-# This script copies a bunch of MySQL records according to specified criteria.
+# This script copies a bunch of database records according to specified criteria.
+# Source and destination may be in the same database, or different databases, even
+# different DBMSes (both MySQL and SQLite currently supported).
+#
 # Invoke this script as follows:
 #
-#     bulk_copy [--user=username] [--password=password]
-#          [--host=host] [--port=port] [--database=database]
-#         src_table_name field_names condition dst_table_name [replace_field_value ...]
+#     bulk_copy \
+#         src_table_name:src_dbms_params \
+#         field_names \
+#         condition \
+#         dst_table_name[:dst_dbms_params] \
+#         [replace_field_value ...]
 #
-# where the username, password, host, port and database are used as MySQL connection parameters.
-# If --password is specified but an empty value is given, then the user will be prompted for
-# the password without echoing.
+# The arguments are interpreted as follows:
 #
-# The arguments are as follows:
+#     src_table_name:src_dbms_params
+#          -- the name of the table to select records from, followed by a colon and
+#             connection parameters for the source DBMS.
+#     field_names
+#          -- comma-separated list of fields to extract, or “*” for all fields.
+#     condition
+#          -- if this is not the empty string, it is substituted as is in an SQL
+#             where-clause to select the records. If it is the empty string, then
+#             all records are selected.
+#     dst_table_name[:dst_dbms_params]
+#          -- the name of the table into which to insert the records, optionally followed
+#             by a colon and connection parameters for the destination DBMS. If the connection
+#             parameters are omitted, then the same DBMS connection is used as for the source
+#             table.
+#     replace_field_value
+#          -- optional additional field specifications in the form “name=value”
+#             to define for the newly-inserted records.
 #
-#     src_table_name      -- the name of the table to select records from.
-#     field_names         -- comma-separated list of fields to extract, or "*" for all fields.
-#     condition           -- substituted as is in a MySQL where-clause to select the records.
-#     dst_table_name      -- the name of the table into which to insert the records.
-#     replace_field_value -- optional additional field specifications in the form "name=value"
-#                            to define for the newly-inserted records.
+# The dbms_params take the form
 #
-# For example:
+#     dbms_name[:param=value[:param=value...]]
 #
-#     bulk_copy --database=billing jobs description,rate client_id=4 jobs client_id=8
+# where dbms_name is the name of the DBMS, currently either “mysql” or “sqlite”, and
+# the additional param/value pairs depend on the DBMS:
 #
-# will find all entries in the "jobs" table in the "billing" database where client_id = 4
-# and insert new copies with the same "description" and "rate" fields, but with client_id
-# set to 8.
+#     * For MySQL, valid params are “user”, “password”, “host”, “port” and “database”,
+#       all of which are optional. As a special case, if “password” is specified but
+#       its value is the empty string, then the user will be prompted to enter the
+#       password without echoing.
+#     * For SQLite, valid params are “filename” (the name of the database file to
+#       open--required) and “write” (whether to open the database for write
+#       access--optional, defaults to yes).
+#
+# Examples:
+#
+#     bulk_copy jobs:mysql:user=fred:database=billing description,rate client_id=4 jobs client_id=8
+#
+# will find all entries in the “jobs” table in the “billing” database where client_id = 4
+# and insert new copies with the same “description” and “rate” fields, but with client_id
+# set to 8. The database is accessed as the user “fred”, with no password.
+#
+#     bulk_copy \
+#         streets:mysql:database=postcodes:user=fred:password=: '*' "postcode like '32%'" \
+#         streets:sqlite:filename=postcodes.db
+#
+# will copy all fields of all records in the “streets” table where the postcode begins with “32”
+# from a MySQL database called “postcodes” into the table with the same name in an SQLite
+# database named “postcodes.db”.
 #
 # Copyright 2009, 2015 by Lawrence D’Oliveiro <ldo@geek-central.gen.nz>.
 # Licensed under CC-BY-SA <http://creativecommons.org/licenses/by-sa/4.0/>.
@@ -34,47 +70,182 @@
 
 import sys
 import mysql.connector
+import apsw as sqlite
 import getopt
 import getpass
 
 #+
-# Useful MySQL stuff
+# Useful database stuff
 #-
 
-def sql_iter(conn, cmd, values = None, mapfn = lambda x : x) :
-    """generator which executes cmd with values in a new cursor on conn,
-    yielding the rows one at a time, optionally mapped through function mapfn."""
-    cursor = conn.cursor()
-    cursor.execute(cmd, values)
-    while True :
-        yield mapfn(next(cursor))
-    #end while
-#end sql_iter
+def parse_bool(s) :
+    "interprets a user-specified string of various common forms as a boolean."
+    s = s[0].lower()
+    if s == "y" or s == "t" or s == "1" :
+        result = True
+    elif s == "n" or s == "f" or s == "0" :
+        result = False
+    else :
+        raise ValueError("invalid bool value %s" % repr(s))
+    #end if
+    return \
+        result
+#end parse_bool
 
-def sql_string(s) :
-    """returns a MySQL string literal which evaluates to s. Needed
-    for those times when the client API's automatic quoting isn't good enough."""
-    result = []
-    for ch in str(s) :
-        if ch == "\0" :
-            ch = "\\0"
-        elif ch == "\010" :
-            ch = "\\b"
-        elif ch == "\011" :
-            ch = "\\t"
-        elif ch == "\012" :
-            ch = "\\n"
-        elif ch == "\015" :
-            ch = "\\r"
-        elif ch == "\032" :
-            ch = "\\z"
-        elif ch == "'" or ch == "\"" or ch == "\\" :
-            ch = "\\" + ch
+class AbstractDBMS :
+    "abstract base class for DBMS-specific classes. Subclasses must override" \
+    " all those with bodies that just raise NotImplementedError."
+
+    conn_parm_names = None
+      # subclass should replace this with a dictionary mapping constructor argument
+      # names to functions that convert the values from strings to appropriate types.
+
+    def __init__(self, **parms) :
+        "subclass should set self.conn to actual DBMS-specific connection object."
+        raise NotImplementedError
+    #end __init__
+
+    def close(self) :
+        self.conn.close()
+    #end close
+
+    def string(self, s) :
+        "returns a string literal which evaluates to s. Needed for those" \
+        " times when the client API's automatic quoting isn't good enough."
+        raise NotImplementedError
+    #end string
+
+    def iter(self, cmd, values = None, mapfn = lambda x : x) :
+        "generator which executes cmd with values in a new cursor on conn," \
+        " yielding the rows one at a time, optionally mapped through function mapfn."
+        raise NotImplementedError
+    #end iter
+
+    def cursor(self) :
+        "returns a new DBMS-specific cursor object."
+        return \
+            self.conn.cursor()
+    #end cursor
+
+    def iter_columns(self, table_name, mapfn = lambda x : x) :
+        "iterates over the column definitions from the specified table." \
+        " The first item in each column definition is always the column name."
+        raise NotImplementedError
+    #end iter_columns
+
+#end AbstractDBMS
+
+class MySQLDBMS(AbstractDBMS) :
+    "handles connections to MySQL databases."
+
+    conn_parm_names = {"database" : str, "host" : str, "password" : str, "port" : int, "user" : str}
+
+    def __init__(self, **parms) :
+        parms = dict(parms) # because I’m going to modify it
+        for oldname, newname in \
+            (
+                ("database", "db"),
+                ("password", "passwd"),
+            ) \
+        :
+            if oldname in parms :
+                parms[newname] = parms[oldname]
+                del parms[oldname]
+            #end if
+        #end for
+        parms["buffered"] = True # needed to avoid “unread result found” errors
+        self.conn = mysql.connector.connect(**parms)
+    #end __init__
+
+    def string(self, s) :
+        # or I could just call self.conn.converter.escape
+        if s == None :
+            result = "null"
+        elif isinstance(s, bytes) :
+            result = "X'" + "".join("%02X" % i for i in s) + "'"
+        else :
+            result = []
+            for ch in str(s) :
+                if ch == "\0" :
+                    ch = "\\0"
+                elif ch == "\010" :
+                    ch = "\\b"
+                elif ch == "\011" :
+                    ch = "\\t"
+                elif ch == "\012" :
+                    ch = "\\n"
+                elif ch == "\015" :
+                    ch = "\\r"
+                elif ch == "\032" :
+                    ch = "\\z"
+                elif ch == "'" or ch == "\"" or ch == "\\" :
+                    ch = "\\" + ch
+                #end if
+                result.append(ch)
+            #end for
+            result = "\"" + "".join(result) + "\""
         #end if
-        result.append(ch)
-    #end for
-    return "\"" + "".join(result) + "\""
-#end sql_string
+        return \
+            result
+    #end string
+
+    def iter(self, cmd, values = None, mapfn = lambda x : x) :
+        cursor = self.conn.cursor()
+        cursor.execute(cmd, values)
+        while True :
+            yield mapfn(next(cursor))
+        #end while
+    #end iter
+
+    def iter_columns(self, table_name, mapfn = lambda x : x) :
+        return \
+            self.iter(cmd = "show columns from %s" % table_name, mapfn = mapfn)
+    #end iter_columns
+
+#end MySQLDBMS
+
+class SQLiteDBMS(AbstractDBMS) :
+    "handles connections to SQLite databases."
+
+    conn_parm_names = {"create" : parse_bool, "filename" : str, "write" : parse_bool}
+
+    def __init__(self, filename, create = False, write = True) :
+        self.conn = sqlite.Connection \
+          (
+            filename,
+            flags =
+                    (sqlite.SQLITE_OPEN_READONLY, sqlite.SQLITE_OPEN_READWRITE)[write]
+                |
+                    (0, sqlite.SQLITE_OPEN_CREATE)[create]
+          )
+    #end __init__
+
+    def string(self, s) :
+        return \
+            sqlite.format_sql_value(s)
+    #end string
+
+    def iter(conn, cmd, values = None, mapfn = lambda x : x) :
+        cu = conn.cursor()
+        result = cu.execute(cmd, values)
+        while True :
+            yield mapfn(next(result))
+        #end while
+    #end iter
+
+    def iter_columns(self, table_name, mapfn = lambda x : x) :
+        for col in self.iter(cmd = "pragma table_info(%s)" % table_name) :
+            yield mapfn(col[1:]) # drop column index
+        #end for
+    #end iter_columns
+
+#end SQLiteDBMS
+
+DBMSClasses = \
+    {
+        "mysql" : MySQLDBMS,
+        "sqlite" : SQLiteDBMS,
+    }
 
 class BulkInserter :
     """bulk insertion of lots of records into an SQL table."""
@@ -89,7 +260,7 @@ class BulkInserter :
         self.table_name = table_name
         self.field_names = tuple(field_names)
         self.ignore_duplicates = ignore_duplicates
-        self.insert_limit = 500 # could even be larger
+        self.insert_limit = 500 # could even be larger for MySQL, but SQLite can’t handle more than this
         self.field_values = []
     #end __init__
 
@@ -105,20 +276,11 @@ class BulkInserter :
         this_record = []
         if type(field_values) == dict :
             for field_name in self.field_names :
-                field_value = field_values[field_name]
-                if field_value != None :
-                    this_record.append(sql_string(field_value))
-                else :
-                    this_record.append("null")
-                #end if
+                this_record.append(self.sql.string(field_values[field_name]))
             #end for
         else :
             for field_value in field_values :
-                if field_value != None :
-                    this_record.append(sql_string(field_value))
-                else :
-                    this_record.append("null")
-                #end if
+                this_record.append(self.sql.string(field_value))
             #end for
         #end if
         self.field_values.append(this_record)
@@ -128,7 +290,7 @@ class BulkInserter :
         """Call this after the last add_record call to make sure all insertions
         have been flushed to the table."""
         if len(self.field_values) != 0 :
-            insert = "insert delayed"
+            insert = "insert" # used to also have “delayed” but this is MySQL-specific
             if self.ignore_duplicates :
                 insert += " ignore"
             #end if
@@ -155,93 +317,125 @@ class BulkInserter :
 # Mainline
 #-
 
-(opts, args) = getopt.getopt \
-  (
-    sys.argv[1:],
-    "",
-    [
-        "database=",
-        "host=",
-        "password=",
-        "port=",
-        "user=",
-    ]
-  )
-if len(args) < 4 :
-    raise getopt.GetoptError \
-      (
-        "need at least src_table_name, fields, condition and dst_table_name args"
-      )
-#end if
-src_table_name = args[0]
-field_names = args[1].split(",")
-condition = args[2]
-dst_table_name = args[3]
-replace_field_names = []
-replace_field_values = []
-for field in args[4:] :
-    field_name, value = field.split("=", 1)
-    if field_name in field_names :
-        raise getopt.GetoptError("can't both copy and replace field %s" % field_name)
-    #end if
-    replace_field_names.append(field_name)
-    replace_field_values.append(value)
-#end for
-conn_params = {"buffered" : True} # needed to avoid “unread result found” errors
-for keyword, value in opts :
-    if keyword == "--database" :
-        conn_params["db"] = value
-    elif keyword == "--host" :
-        conn_params["host"] = value
-    elif keyword == "--port" :
-        conn_params["port"] = int(value)
-    elif keyword == "--user" :
-        conn_params["user"] = value
-    elif keyword == "--password" :
-        conn_params["passwd"] = value
-    #end if
-#end for
-if conn_params.get("passwd") == "" :
-    conn_params["passwd"] = getpass.getpass()
-#end if
-conn = mysql.connector.connect(**conn_params)
-if len(field_names) == 1 and field_names[0] == "*" :
-    field_names = list \
-      (
-            set(sql_iter
-              (
-                conn = conn,
-                cmd = "show columns from %s" % src_table_name,
-                mapfn = lambda x : x[0]
-              ))
-        -
-            set(replace_field_names)
-      )
-#end if
-all_field_names = field_names + replace_field_names
-
-nr_records = 0
-insert = BulkInserter(conn, dst_table_name, all_field_names, False)
-for \
-        entry \
-    in \
-        sql_iter \
+def mainline() :
+    args = sys.argv[1:]
+    if len(args) < 4 :
+        raise getopt.GetoptError \
           (
-            conn = conn,
-            cmd =
-                    "select %(fields)s from %(table)s where %(condition)s"
-                %
-                    {
-                        "fields" : ", ".join(field_names),
-                        "table" : src_table_name,
-                        "condition" : condition,
-                    }
-          ) \
-:
-    insert.add_record(list(entry) + replace_field_values)
-    nr_records += 1
-#end for
-insert.done_insert()
-sys.stderr.write("records inserted: %s\n" % nr_records)
+            "need at least src_table_name, fields, condition and dst_table_name args"
+          )
+    #end if
+    src_table_name = args[0]
+    field_names = args[1].split(",")
+    condition = args[2]
+    dst_table_name = args[3]
 
-conn.close()
+    doing_dst_table = False
+    while True :
+        items = (src_table_name, dst_table_name)[doing_dst_table].split(":")
+        if doing_dst_table :
+            dst_table_name = items[0]
+        else :
+            src_table_name = items[0]
+        #end if
+        if len(items) < 2 and not doing_dst_table :
+            raise getopt.GetoptError \
+              (
+                "need to specify DBMS on src_table_name"
+              )
+        #end if
+        if len(items) > 1 :
+            dbmstype = items[1]
+            if dbmstype not in DBMSClasses :
+                raise getopt.GetoptError \
+                  (
+                    "unrecognized DBMS “%s”" % dbmstype
+                  )
+            #end if
+            DBMSClass = DBMSClasses[dbmstype]
+            conn_params = {}
+            unrecognized = set()
+            for item in items[2:] :
+                keyword, value = item.split("=", 1)
+                if keyword in DBMSClass.conn_parm_names and keyword != "create" :
+                    # no point supporting “create”, since destination table must already exist
+                    conn_params[keyword] = DBMSClass.conn_parm_names[keyword](value)
+                else :
+                    unrecognized.add(keyword)
+                #end if
+            #end for
+            if len(unrecognized) != 0 :
+                raise getopt.GetoptError \
+                  (
+                    "unrecognized %s connection params: %s" % (dbmstype, ",".join(sorted(unrecognized)))
+                  )
+            #end if
+            if conn_params.get("password") == "" :
+                conn_params["password"] = getpass.getpass()
+            #end if
+            conn = DBMSClass(**conn_params)
+            if doing_dst_table :
+                dst_conn = conn
+            else :
+                src_conn = conn
+            #end if
+        else :
+            dst_conn = src_conn
+        #end if
+        if doing_dst_table :
+            break
+        doing_dst_table = True
+    #end while
+
+    replace_field_names = []
+    replace_field_values = []
+    for field in args[4:] :
+        field_name, value = field.split("=", 1)
+        if field_name in field_names :
+            raise getopt.GetoptError("can't both copy and replace field %s" % field_name)
+        #end if
+        replace_field_names.append(field_name)
+        replace_field_values.append(value)
+    #end for
+    if len(field_names) == 1 and field_names[0] == "*" :
+        field_names = list \
+          (
+                set(src_conn.iter_columns(src_table_name, mapfn = lambda x : x[0]))
+            -
+                set(replace_field_names)
+          )
+    #end if
+    all_field_names = field_names + replace_field_names
+
+    nr_records = 0
+    insert = BulkInserter(dst_conn, dst_table_name, all_field_names, ignore_duplicates = False)
+    for \
+            entry \
+        in \
+            src_conn.iter \
+              (
+                cmd =
+                        "select %(fields)s from %(table)s%(condition)s"
+                    %
+                        {
+                            "fields" : ", ".join(field_names),
+                            "table" : src_table_name,
+                            "condition" : ("", " where " + condition)[condition != ""],
+                        }
+              ) \
+    :
+        insert.add_record(list(entry) + replace_field_values)
+        nr_records += 1
+    #end for
+    insert.done_insert()
+    sys.stderr.write("records inserted: %s\n" % nr_records)
+
+    if dst_conn != src_conn :
+        dst_conn.close()
+    #end if
+    src_conn.close()
+#end mainline
+
+if __name__ == "__main__" :
+    mainline()
+#end if
