@@ -79,97 +79,91 @@ from sql_useful import \
 # Mainline
 #-
 
-def mainline() :
-    args = sys.argv[1:]
-    if len(args) < 4 :
+args = sys.argv[1:]
+if len(args) < 4 :
+    raise getopt.GetoptError \
+      (
+        "need at least src_table_name, fields, condition and dst_table_name args"
+      )
+#end if
+src_table_name = args[0]
+field_names = args[1].split(",")
+condition = args[2]
+dst_table_name = args[3]
+
+doing_dst_table = False
+while True :
+    items = (src_table_name, dst_table_name)[doing_dst_table].split(":", 1)
+    if doing_dst_table :
+        dst_table_name = items[0]
+    else :
+        src_table_name = items[0]
+    #end if
+    if len(items) < 2 and not doing_dst_table :
         raise getopt.GetoptError \
           (
-            "need at least src_table_name, fields, condition and dst_table_name args"
+            "need to specify DBMS on src_table_name"
           )
     #end if
-    src_table_name = args[0]
-    field_names = args[1].split(",")
-    condition = args[2]
-    dst_table_name = args[3]
-
-    doing_dst_table = False
-    while True :
-        items = (src_table_name, dst_table_name)[doing_dst_table].split(":", 1)
+    if len(items) > 1 :
+        conn = parse_dbms_params(items[1], "%s table" % ("src", "dst")[doing_dst_table])
         if doing_dst_table :
-            dst_table_name = items[0]
+            dst_conn = conn
         else :
-            src_table_name = items[0]
+            src_conn = conn
         #end if
-        if len(items) < 2 and not doing_dst_table :
-            raise getopt.GetoptError \
-              (
-                "need to specify DBMS on src_table_name"
-              )
-        #end if
-        if len(items) > 1 :
-            conn = parse_dbms_params(items[1], "%s table" % ("src", "dst")[doing_dst_table])
-            if doing_dst_table :
-                dst_conn = conn
-            else :
-                src_conn = conn
-            #end if
-        else :
-            dst_conn = src_conn
-        #end if
-        if doing_dst_table :
-            break
-        doing_dst_table = True
-    #end while
-
-    replace_field_names = []
-    replace_field_values = []
-    for field in args[4:] :
-        field_name, value = field.split("=", 1)
-        if field_name in field_names :
-            raise getopt.GetoptError("can't both copy and replace field %s" % field_name)
-        #end if
-        replace_field_names.append(field_name)
-        replace_field_values.append(value)
-    #end for
-    if len(field_names) == 1 and field_names[0] == "*" :
-        field_names = list \
-          (
-                set(col["name"] for col in src_conn.iter_columns(src_table_name))
-            -
-                set(replace_field_names)
-          )
+    else :
+        dst_conn = src_conn
     #end if
-    all_field_names = field_names + replace_field_names
+    if doing_dst_table :
+        break
+    doing_dst_table = True
+#end while
 
-    nr_records = 0
-    insert = BulkInserter(dst_conn, dst_table_name, all_field_names, ignore_duplicates = False)
-    for \
-            entry \
-        in \
-            src_conn.iter \
-              (
-                cmd =
-                        "select %(fields)s from %(table)s%(condition)s"
-                    %
-                        {
-                            "fields" : ", ".join(field_names),
-                            "table" : src_table_name,
-                            "condition" : ("", " where " + condition)[condition != ""],
-                        }
-              ) \
-    :
-        insert.add_record(list(entry) + replace_field_values)
-        nr_records += 1
-    #end for
-    insert.done_insert()
-    sys.stderr.write("records inserted: %s\n" % nr_records)
-
-    if dst_conn != src_conn :
-        dst_conn.close()
+replace_field_names = []
+replace_field_values = []
+for field in args[4:] :
+    field_name, value = field.split("=", 1)
+    if field_name in field_names :
+        raise getopt.GetoptError("can't both copy and replace field %s" % field_name)
     #end if
-    src_conn.close()
-#end mainline
-
-if __name__ == "__main__" :
-    mainline()
+    replace_field_names.append(field_name)
+    replace_field_values.append(value)
+#end for
+if len(field_names) == 1 and field_names[0] == "*" :
+    field_names = list \
+      (
+            set(col["name"] for col in src_conn.iter_columns(src_table_name))
+        -
+            set(replace_field_names)
+      )
 #end if
+all_field_names = field_names + replace_field_names
+
+nr_records = 0
+insert = BulkInserter(dst_conn, dst_table_name, all_field_names, ignore_duplicates = False)
+for \
+        entry \
+    in \
+        src_conn.iter \
+          (
+            cmd =
+                    "select %(fields)s from %(table)s%(condition)s"
+                %
+                    {
+                        "fields" : ", ".join(field_names),
+                        "table" : src_table_name,
+                        "condition" : ("", " where " + condition)[condition != ""],
+                    }
+          ) \
+:
+    insert.add_record(list(entry) + replace_field_values)
+    nr_records += 1
+#end for
+insert.done_insert()
+sys.stderr.write("records inserted: %s\n" % nr_records)
+
+if dst_conn != src_conn :
+    dst_conn.close()
+#end if
+src_conn.close()
