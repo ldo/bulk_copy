@@ -69,6 +69,7 @@
 #-
 
 import sys
+import time
 import re
 import getopt
 from sql_useful import \
@@ -141,6 +142,7 @@ if len(field_names) == 1 and field_names[0] == "*" :
 all_field_names = field_names + replace_field_names
 
 nr_records = 0
+start = time.time()
 insert = BulkInserter(dst_conn, dst_table_name, all_field_names, ignore_duplicates = False)
 for \
         entry \
@@ -161,7 +163,8 @@ for \
     nr_records += 1
 #end for
 insert.done_insert()
-sys.stderr.write("records inserted: %s\n" % nr_records)
+elapsed = time.time() - start
+sys.stderr.write("records inserted: %s in %.2fs (%.1f records/s)\n" % (nr_records, elapsed, nr_records / elapsed))
 
 if dst_conn != src_conn :
     dst_conn.close()
