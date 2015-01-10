@@ -106,7 +106,7 @@ while True :
           )
     #end if
     if len(items) > 1 :
-        conn = parse_dbms_params(items[1], "%s table" % ("src", "dst")[doing_dst_table])
+        conn = parse_dbms_params(items[1], "for %s table" % ("src", "dst")[doing_dst_table])
         if doing_dst_table :
             dst_conn = conn
         else :

@@ -367,7 +367,7 @@ def parse_dbms_params(paramsstr, doing_what) :
     if len(unrecognized) != 0 :
         raise getopt.GetoptError \
           (
-                "unrecognized %s connection params: %s %s"
+                "unrecognized %s connection params “%s” %s"
             %
                 (dbmstype, ",".join(sorted(unrecognized)), doing_what)
           )
