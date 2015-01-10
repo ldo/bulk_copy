@@ -39,6 +39,9 @@ class AbstractDBMS :
         raise NotImplementedError
     #end iter
 
+    blob_type = None
+      # subclass should replace this with a string giving the name of the binary blob type.
+
     def cursor(self) :
         "returns a new DBMS-specific cursor object."
         return \
@@ -140,6 +143,8 @@ class MySQLDBMS(AbstractDBMS) :
         #end while
     #end iter
 
+    blob_type = "binary"
+
     def iter_table_names(self) :
         "note this will only work if there is a default database."
         return \
@@ -219,6 +224,8 @@ class SQLiteDBMS(AbstractDBMS) :
             yield mapfn(next(result))
         #end while
     #end iter
+
+    blob_type = "blob"
 
     def iter_table_names(self) :
         return \

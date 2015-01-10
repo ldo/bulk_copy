@@ -1,15 +1,13 @@
 #!/usr/bin/python3
 #+
-# This script does text conversion on values of a specified field in a table of
-# a MySQL database. Invoke this script as follows:
+# This script does text conversion on values of a specified field in a database table.
+# Invoke this script as follows:
 #
-#     convert_field [--user=username] [--password=password]
-#          [--host=host] [--port=port] [--database=database] [--convert]
+#     convert_field [--convert] dbms_params
 #         table_name id_field_names field_name src_encoding dst_encoding
 #
-# where the username, password, host, port and database are used as MySQL connection parameters.
-# If --password is specified but an empty value is given, then the user will be prompted for
-# the password without echoing.
+# where the dbms_params are a colon-separated string of items specifying the DBMS name
+# and connection parameters.
 #
 # table_name is the name of the table, id_field_names is the name of a unique-valued field
 # (or comma-separated list of fields with a unique-valued combination of values) identifying
@@ -23,53 +21,9 @@
 #-
 
 import sys
-import mysql.connector
 import getopt
-import getpass
-
-#+
-# Useful MySQL stuff
-#-
-
-def sql_iter(conn, cmd, values = None, mapfn = lambda x : x) :
-    """generator which executes cmd with values in a new cursor on conn,
-    yielding the rows one at a time, optionally mapped through function mapfn."""
-    cursor = conn.cursor()
-    cursor.execute(cmd, values)
-    while True :
-        yield mapfn(next(cursor))
-    #end while
-#end sql_iter
-
-def sql_string(s) :
-    """returns a MySQL string literal which evaluates to s. Needed
-    for those times when the client API's automatic quoting isn't good enough."""
-    result = []
-    for ch in str(s) :
-        if ch == "\0" :
-            ch = "\\0"
-        elif ch == "\010" :
-            ch = "\\b"
-        elif ch == "\011" :
-            ch = "\\t"
-        elif ch == "\012" :
-            ch = "\\n"
-        elif ch == "\015" :
-            ch = "\\r"
-        elif ch == "\032" :
-            ch = "\\z"
-        elif ch == "'" or ch == "\"" or ch == "\\" :
-            ch = "\\" + ch
-        #end if
-        result.append(ch)
-    #end for
-    return "\"" + "".join(result) + "\""
-#end sql_string
-
-def sql_byte_string(val) :
-    return \
-        "X'" + "".join("%02X" % i for i in val) + "'"
-#end sql_byte_string
+from sql_useful import \
+    parse_dbms_params
 
 #+
 # Mainline
@@ -79,45 +33,23 @@ def sql_byte_string(val) :
   (
     sys.argv[1:],
     "",
-    [
-        "database=",
-        "host=",
-        "password=",
-        "port=",
-        "user=",
-        "convert",
-    ]
+    ["convert"]
   )
-if len(args) != 5 :
+if len(args) != 6 :
     raise getopt.GetoptError \
       (
-        "need table_name, field_name, src_encoding and dst_encoding args"
+        "need dbms_params, table_name, id_field_names, field_name, src_encoding and dst_encoding args"
       )
 #end if
-(table_name, id_field_names, field_name, src_encoding, dst_encoding) = args
+dbms_parms, table_name, id_field_names, field_name, src_encoding, dst_encoding = args
 id_field_names = tuple(id_field_names.split(","))
-conn_params = {"buffered" : True} # needed to avoid “unread result found” errors
 do_convert = False
 for keyword, value in opts :
-    if keyword == "--database" :
-        conn_params["db"] = value
-    elif keyword == "--host" :
-        conn_params["host"] = value
-    elif keyword == "--port" :
-        conn_params["port"] = int(value)
-    elif keyword == "--user" :
-        conn_params["user"] = value
-    elif keyword == "--password" :
-        conn_params["passwd"] = value
-    elif keyword == "--convert" :
+    if keyword == "--convert" :
         do_convert = True
     #end if
 #end for
-if conn_params.get("passwd") == "" :
-    conn_params["passwd"] = getpass.getpass()
-#end if
-conn = mysql.connector.connect(**conn_params)
-conn.set_unicode(False)
+conn = parse_dbms_params(dbms_parms, "for table")
 
 update_cursor = None
 nr_checked = 0
@@ -125,14 +57,18 @@ nr_changed = 0
 for \
     in_fields \
 in \
-    sql_iter \
+    conn.iter \
       (
-        conn = conn,
         cmd =
                 "select %(fields)s from %(table)s"
             %
                 {
-                    "fields" : ", ".join((field_name,) + id_field_names),
+                    "fields" : ", ".join
+                      (
+                            ("cast(%s as %s)" % (field_name, conn.blob_type),)
+                        +
+                            id_field_names
+                      ),
                     "table" : table_name,
                 }
       ) \
@@ -157,12 +93,12 @@ in \
                             %
                                 {
                                     "field" : id_field_names[i],
-                                    "value" : sql_string(in_fields[i + 1]),
+                                    "value" : conn.string(in_fields[i + 1]),
                                 }
                             for i in range(0, len(id_field_names))
                           ),
-                    "old" : sql_string(in_value),
-                    "new" : sql_byte_string(out_value),
+                    "old" : conn.string(in_value),
+                    "new" : conn.string(out_value),
                 }
           )
         if do_convert :
@@ -176,14 +112,14 @@ in \
                     {
                         "table" : table_name,
                         "field" : field_name,
-                        "value" : sql_byte_string(out_value),
+                        "value" : conn.string(out_value),
                         "identify" : " and ".join
                           (
                                 "%(field)s = %(value)s"
                             %
                                 {
                                     "field" : id_field_names[i],
-                                    "value" : sql_string(in_fields[i + 1]),
+                                    "value" : conn.string(in_fields[i + 1]),
                                 }
                             for i in range(0, len(id_field_names))
                           ),
