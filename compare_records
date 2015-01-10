@@ -3,17 +3,16 @@
 # This script does comparisons on two sets of records and displays any differences.
 # Invoke it as follows:
 #
-#     compare_records [--user=username] [--password=password] [--host=host] [--port=port]
-#         [--database=database] [--order=order] [--order1=order1] [--order2=order2]
+#     compare_records [--order=order] [--order1=order1] [--order2=order2]
 #         [remap...]
+#         dbms_params
 #         field_names
 #         table_spec
 #         criteria1
 #         criteria2
 #
-# where the username, password, host, port and database are used as MySQL connection parameters.
-# If --password is specified but an empty value is given, then the user will be prompted for
-# the password without echoing.
+# where the dbms_params are a colon-separated string of items specifying the DBMS name
+# and connection parameters.
 #
 # field_names is a comma-separated list of names of fields whose values are to be compared,
 # and table_spec specifies the table(s) from which the fields are to be obtained; this can
@@ -22,7 +21,7 @@
 # table_name.* expands to all the fields defined for the specified table. A field name beginning
 # with - means to exclude that particular name from a prior wildcard expansion.
 #
-# criteria1 and criteria2 are MySQL expressions selecting the two sets of records to be
+# criteria1 and criteria2 are SQL expressions selecting the two sets of records to be
 # compared. The optional remap specifications take the form of
 #
 #     --remap=field:value1:value2
@@ -39,108 +38,54 @@
 #-
 
 import sys
-import mysql.connector
 import getopt
-import getpass
-
-#+
-# Useful MySQL stuff
-#-
-
-def sql_iter(conn, cmd, values = None, mapfn = lambda x : x) :
-    """generator which executes cmd with values in a new cursor on conn,
-    yielding the rows one at a time, optionally mapped through function mapfn."""
-    cursor = conn.cursor()
-    cursor.execute(cmd, values)
-    while True :
-        yield mapfn(next(cursor))
-    #end while
-#end sql_iter
+from sql_useful import \
+    parse_dbms_params
 
 #+
 # Mainline
 #-
 
-(opts, args) = getopt.getopt \
+opts, args = getopt.getopt \
   (
     sys.argv[1:],
     "",
-    [
-        "database=",
-        "host=",
-        "password=",
-        "port=",
-        "user=",
-        "order=",
-        "order1=",
-        "order2=",
-        "remap=",
-    ]
+    ["order=", "order1=", "order2=", "remap="]
   )
-if len(args) != 4 :
+if len(args) != 5 :
     raise getopt.GetoptError \
       (
-        "need field_names, table_spec, criteria1 and criteria2 args"
+        "need dbms_params, field_names, table_spec, criteria1 and criteria2 args"
       )
 #end if
-(arg_field_names, table_spec, criteria1, criteria2) = args
-conn_params = {"buffered" : True}
+dbms_parms, arg_field_names, table_spec, criteria1, criteria2 = args
 remap = {}
 order = None
 order1 = None
 order2 = None
 for keyword, value in opts :
-    if keyword == "--database" :
-        conn_params["db"] = value
-    elif keyword == "--host" :
-        conn_params["host"] = value
-    elif keyword == "--port" :
-        conn_params["port"] = int(value)
-    elif keyword == "--user" :
-        conn_params["user"] = value
-    elif keyword == "--password" :
-        conn_params["passwd"] = value
-    elif keyword == "--order" :
+    if keyword == "--order" :
         order = value
     elif keyword == "--order1" :
         order1 = value
     elif keyword == "--order2" :
         order2 = value
     elif keyword == "--remap" :
-        (remap_field, remap_value1, remap_value2) = value.split(":", 2)
+        remap_field, remap_value1, remap_value2 = value.split(":", 2)
         if remap_field not in remap :
             remap[remap_field] = {}
         #end if
         remap[remap_field][remap_value1] = remap_value2
     #end if
 #end for
-if conn_params.get("passwd") == "" :
-    conn_params["passwd"] = getpass.getpass()
-#end if
-conn = mysql.connector.connect(**conn_params)
+conn = parse_dbms_params(dbms_parms, "for table")
 field_names = []
 for entry in arg_field_names.split(",") :
     if entry == "*" :
-        field_names.extend \
-          (
-            sql_iter
-              (
-                conn = conn,
-                cmd = "show columns from %s" % table_spec,
-                mapfn = lambda x : x[0]
-              )
-          )
+        field_names.extend(col["name"] for col in conn.iter_columns(table_spec))
     elif entry.endswith(".*") :
         table_name = entry[:-2]
-        field_names.extend \
-          (
-            sql_iter
-              (
-                conn = conn,
-                cmd = "show columns from %s" % table_name,
-                mapfn = lambda x : table_name + "." + x[0]
-              )
-          )
+        field_names.extend(table_name + "." + col["name"] for col in conn.iter_columns(table_spec))
     elif entry.startswith("-") :
         field_names = list \
           (
@@ -163,9 +108,8 @@ if order2 == None :
     order2 = ", ".join(field_names)
 #end if
 
-iter1 = sql_iter \
+iter1 = conn.iter \
   (
-    conn = conn,
     cmd =
             "select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(order)s"
         %
@@ -177,9 +121,8 @@ iter1 = sql_iter \
             },
     mapfn = lambda r : tuple(str(f) for f in r)
   )
-iter2 = sql_iter \
+iter2 = conn.iter \
   (
-    conn = conn,
     cmd =
             "select %(fieldnames)s from %(tablespec)s where %(criteria)s order by %(order)s"
         %
