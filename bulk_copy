@@ -69,8 +69,6 @@
 #-
 
 import sys
-from collections import \
-    OrderedDict
 import re
 import mysql.connector
 import apsw as sqlite
