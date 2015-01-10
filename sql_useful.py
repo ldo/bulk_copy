@@ -12,9 +12,10 @@ import getpass
 
 class AbstractDBMS :
     "abstract base class for DBMS-specific classes. Subclasses must override" \
-    " all those with bodies that just raise NotImplementedError."
+    " all those variables which are initialized to NotImplemented, and all those" \
+    " methods with bodies that raise NotImplementedError."
 
-    conn_parm_names = None
+    conn_parm_names = NotImplemented
       # subclass should replace this with a dictionary mapping constructor argument
       # names to functions that convert the values from strings to appropriate types.
 
@@ -39,7 +40,7 @@ class AbstractDBMS :
         raise NotImplementedError
     #end iter
 
-    blob_type = None
+    blob_type = NotImplemented
       # subclass should replace this with a string giving the name of the binary blob type.
 
     def cursor(self) :
