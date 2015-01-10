@@ -50,19 +50,20 @@ class AbstractDBMS :
     #end cursor
 
     def iter_table_names(self) :
-        "yields a list of table names."
+        "yields the names of all tables."
         return NotImplementedError
     #end iter_table_names
 
     def iter_columns(self, table_name) :
         "yields column definitions for the specified table." \
-        " Each column definition is a dict containing at least type, not_null, default and" \
+        " Each column definition is a dict containing at least name, type, not_null, default and" \
         " (if appropriate) primary_key_seq information."
         raise NotImplementedError
     #end iter_columns
 
     def iter_keys(self, table_name) :
-        "yields information about non-primary keys for the specified table."
+        "yields information about non-primary keys for the specified table. Each key" \
+        " definition is a dict containing at least name, unique and fields (tuple of field names)."
         return NotImplementedError
     #end iter_keys
 
