@@ -75,7 +75,7 @@ in \
                 {
                     "fields" : ", ".join(field_list),
                     "table" : table_name,
-                    "cond" : (lambda : "", lambda : "where %s" % condition)[condition != None](),
+                    "cond" : (lambda : "", lambda : " where %s" % condition)[condition != None](),
                 }
       ) \
 :
