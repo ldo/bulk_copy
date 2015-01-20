@@ -1,0 +1,93 @@
+#!/usr/bin/python3
+#+
+# This script extracts the value of a specified field into a file.
+# It is useful for binary-valued fields, which the usual DBMS command-line
+# tools often have trouble with. Invoke it as follows:
+#
+#     extract_field database_spec table_name field_name output_name [condition]
+#
+# where database_spec specifies the database to operate on, field_name
+# is the name of the field to extract, output_name is the output filename
+# (which can be a formatting template if extracting the field value for
+# multiple records) and condition is the optional condition for selecting
+# the records (defaults to all).
+#
+# Copyright 2015 by Lawrence D’Oliveiro <ldo@geek-central.gen.nz>.
+# Licensed under CC-BY-SA <http://creativecommons.org/licenses/by-sa/4.0/>.
+#-
+
+import sys
+import getopt
+from sql_useful import \
+    parse_dbms_params
+
+#+
+# Mainline
+#-
+
+args = sys.argv[1:]
+if len(args) < 4 or len(args) > 5 :
+    raise getopt.GetoptError \
+      (
+        "usage: %s database_spec table_name field_name output_name [condition]" % sys.argv[0]
+      )
+#end if
+table_name = args[1]
+field_name = args[2]
+output_name = args[3]
+if len(args) > 4 :
+    condition = args[4]
+else :
+    condition = None
+#end if
+conn = parse_dbms_params(args[0], "for extract_field")
+id_field_names = []
+fmt_pos = -1
+while True :
+    fmt_pos += 1
+    if fmt_pos == len(output_name) :
+        break
+    pos = output_name[fmt_pos:].find("%")
+    if pos < 0 :
+        break
+    pos += fmt_pos
+    if output_name[pos + 1] == "%" :
+        pos += 1
+    else :
+        if output_name[pos + 1] != "(" :
+            raise getopt.GetoptError("format items must have names in “(”..“)” : %s" % output_name[pos:])
+        #end if
+        id_field = output_name[pos + 2 : output_name[pos + 2:].index(")") + pos + 2]
+        id_field_names.append(id_field)
+    #end if
+    fmt_pos = pos
+#end while
+nr_records = 0
+field_list = tuple(set(id_field_names) | set((field_name,)))
+for \
+    record \
+in \
+    conn.iter \
+      (
+        cmd =
+                "select %(fields)s from %(table)s%(cond)s"
+            %
+                {
+                    "fields" : ", ".join(field_list),
+                    "table" : table_name,
+                    "cond" : (lambda : "", lambda : "where %s" % condition)[condition != None](),
+                }
+      ) \
+:
+    if nr_records == 1 and len(id_field_names) == 0 :
+        raise ValueError("more than one record found, but only one output filename specified")
+    #end if
+    nr_records += 1
+    fields = dict(zip(field_list, record))
+    outfile_name = output_name % fields
+    outfile = open(outfile_name, "wb")
+    outfile.write(fields[field_name])
+    outfile.close()
+    sys.stderr.write("Wrote %s => %s\n" % (repr(dict((k, fields[k]) for k in id_field_names)), outfile_name))
+#end for
+sys.stderr.write("Records found: %d\n" % nr_records)
