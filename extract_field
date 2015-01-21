@@ -63,6 +63,7 @@ while True :
     fmt_pos = pos
 #end while
 nr_records = 0
+nr_written = 0
 field_list = tuple(set(id_field_names) | set((field_name,)))
 for \
     record \
@@ -79,15 +80,20 @@ in \
                 }
       ) \
 :
-    if nr_records == 1 and len(id_field_names) == 0 :
+    if nr_written == 1 and len(id_field_names) == 0 :
         raise ValueError("more than one record found, but only one output filename specified")
     #end if
     nr_records += 1
     fields = dict(zip(field_list, record))
-    outfile_name = output_name % fields
-    outfile = open(outfile_name, "wb")
-    outfile.write(fields[field_name])
-    outfile.close()
-    sys.stderr.write("Wrote %s => %s\n" % (repr(dict((k, fields[k]) for k in id_field_names)), outfile_name))
+    if fields[field_name] != None :
+        nr_written += 1
+        outfile_name = output_name % fields
+        outfile = open(outfile_name, "wb")
+        outfile.write(fields[field_name])
+        outfile.close()
+        sys.stderr.write("Wrote %s => %s\n" % (repr(dict((k, fields[k]) for k in id_field_names)), outfile_name))
+    else :
+        sys.stderr.write("Null field %s for %s\n" % (field_name, repr(dict((k, fields[k]) for k in id_field_names))))
+    #end if
 #end for
-sys.stderr.write("Records found: %d\n" % nr_records)
+sys.stderr.write("Records found: %d/%d\n" % (nr_written, nr_records))
