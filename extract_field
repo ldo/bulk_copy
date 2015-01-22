@@ -4,7 +4,7 @@
 # It is useful for binary-valued fields, which the usual DBMS command-line
 # tools often have trouble with. Invoke it as follows:
 #
-#     extract_field database_spec table_name field_name output_name [condition]
+#     extract_field [--existing=error|overwrite|skip] database_spec table_name field_name output_name [condition]
 #
 # where database_spec specifies the database to operate on, field_name
 # is the name of the field to extract, output_name is the output filename
@@ -17,21 +17,41 @@
 #-
 
 import sys
+import enum
+import os
 import getopt
 from sql_useful import \
     parse_dbms_params
+
+@enum.unique
+class EXISTING_ACTION(enum.Enum) :
+    ERROR = "error"
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+#end EXISTING_ACTION
 
 #+
 # Mainline
 #-
 
-args = sys.argv[1:]
+existing = EXISTING_ACTION.ERROR
+opts, args = getopt.getopt \
+  (
+    sys.argv[1:],
+    "",
+    ["existing="]
+  )
 if len(args) < 4 or len(args) > 5 :
     raise getopt.GetoptError \
       (
         "usage: %s database_spec table_name field_name output_name [condition]" % sys.argv[0]
       )
 #end if
+for keyword, value in opts :
+    if keyword == "--existing" :
+        existing = tuple(i for i in EXISTING_ACTION if i.value == value)[0]
+    #end if
+#end for
 table_name = args[1]
 field_name = args[2]
 output_name = args[3]
@@ -80,20 +100,26 @@ in \
                 }
       ) \
 :
-    if nr_written == 1 and len(id_field_names) == 0 :
-        raise ValueError("more than one record found, but only one output filename specified")
-    #end if
     nr_records += 1
     fields = dict(zip(field_list, record))
     if fields[field_name] != None :
+        id_fields = dict((k, fields[k]) for k in id_field_names)
         nr_written += 1
-        outfile_name = output_name % fields
-        outfile = open(outfile_name, "wb")
-        outfile.write(fields[field_name])
-        outfile.close()
-        sys.stderr.write("Wrote %s => %s\n" % (repr(dict((k, fields[k]) for k in id_field_names)), outfile_name))
+        outfile_name = output_name % dict((k, fields[k] if fields[k] != None else "") for k in fields)
+        if os.path.exists(outfile_name) and existing != EXISTING_ACTION.OVERWRITE :
+            if existing == EXISTING_ACTION.ERROR :
+                raise FileExistsError("output %s for %s already exists" % (outfile_name, repr(id_fields)))
+            else :
+                sys.stderr.write("skip existing %s for %s\n" % (outfile_name, repr(id_fields)))
+            #end if
+        else :
+            outfile = open(outfile_name, "wb")
+            outfile.write(fields[field_name])
+            outfile.close()
+            sys.stderr.write("Wrote %s => %s\n" % (repr(id_fields), outfile_name))
+        #end if
     else :
-        sys.stderr.write("Null field %s for %s\n" % (field_name, repr(dict((k, fields[k]) for k in id_field_names))))
+        sys.stderr.write("Null field %s for %s\n" % (field_name, repr(id_fields)))
     #end if
 #end for
 sys.stderr.write("Records found: %d/%d\n" % (nr_written, nr_records))
