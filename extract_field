@@ -12,6 +12,11 @@
 # multiple records) and condition is the optional condition for selecting
 # the records (defaults to all).
 #
+# --existing tells the script what to do if an output file already exists:
+#     error     -- report an error an abort the script (default)
+#     overwrite -- overwrite the existing file
+#     skip      -- skip writing this file, go on to the next
+#
 # output_name can contain Python-2-style formatting items like “%(field_name)s”;
 # each field_name is interpreted as an additional field name for which to get
 # values from the records, and the value is substituted into the template to generate
